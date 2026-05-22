@@ -1,0 +1,67 @@
+{
+  "summary": "First test run for ACREDIA backend. 27/30 backend tests PASSED, 3 SKIPPED (no SubjectMatch records existed because /api/application/process/ — the only path that creates them — is broken). Two CRITICAL backend issues found: (1) /api/application/process/ returns HTTP 500 with 'You cannot call this from an async context - use a thread or sync_to_async.' due to running Django sync ORM inside async run_full_evaluation; (2) ALL Gemini AI calls (recommend_course, chat_message, OCR, subject matching) silently fail with 'RateLimitError: limit: 0, model: gemini-3.1-pro' (free-tier quota = 0). Endpoints return 200 with fallback error strings instead of real AI output, so user-facing AI features are non-functional. Auth, CRUD, role-based listing, application submit/finalize, work experience, document upload, dashboard stats and predictions all work correctly.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/application/process/",
+        "issue": "Returns HTTP 500: 'You cannot call this from an async context - use a thread or sync_to_async.' run_full_evaluation in core/upload_views.py is async def but calls sync Django ORM (Application.objects.get, SubjectMatch.objects.filter().delete(), TORSubject.objects.filter, CurriculumSubject.objects.filter, .save() etc.) inside asyncio.run(). Same root cause affects process_tor_ocr_async invoked from upload_document for TOR uploads (log: 'OCR processing error: You cannot call this from an async context'). Fix: wrap all ORM calls with asgiref.sync.sync_to_async, or restructure the function to be synchronous and use async_to_sync only around the gemini_service awaits.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "/api/recommend-course/, /api/chat/message/, OCR pipeline, subject matching",
+        "issue": "Gemini API quota exhausted: 'litellm.RateLimitError: ... Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro'. The GEMINI_API_KEY in /app/backend/.env has 0 free-tier quota. Endpoints return HTTP 200 but with fallback content (recommend_course -> {'program':'BSIT','reasoning':'Error generating recommendation','confidence':0}; chat_message -> bot says 'I apologize, but I'm having trouble processing your message right now. Please try again.'). Net effect: every AI-driven feature is non-functional in production.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "core/urls.py / core/upload_views.py",
+        "issue": "Backend startup log shows 'AttributeError: module core.upload_views has no attribute upload_tor'. Current urls.py does not reference upload_tor (likely stale URL registration during a previous reload). Verify no leftover references remain in any included URLConf."
+      },
+      {
+        "endpoint": "/api/recommend-course/",
+        "issue": "When Gemini fails, returns HTTP 200 with a fallback object. Should return 502/503 (or include a clear 'ai_unavailable' flag) so frontend can show a proper error UI instead of silently displaying 'Error generating recommendation' as the reasoning."
+      },
+      {
+        "endpoint": "/api/chat/message/",
+        "issue": "Same as above — when Gemini call raises, the bot saves a generic apology message and returns 200. Frontend cannot distinguish a real reply from an internal failure."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix async-context bug in core/upload_views.py: wrap Django ORM calls inside run_full_evaluation and process_tor_ocr_async with sync_to_async (asgiref.sync), or convert the functions to sync and use async_to_sync only around gemini_service.* awaits. This unblocks /api/application/process/, OCR for TOR uploads, subject matching and predictions seeding.",
+    "Resolve Gemini quota issue. The current GEMINI_API_KEY is on free tier with limit=0 for gemini-3.1-pro. Either (a) provide a billing-enabled Gemini API key, (b) switch to EMERGENT_LLM_KEY via emergentintegrations, or (c) downgrade to a model still allowed on the current key. Verify by re-running /api/chat/message/ — bot should return real reasoning, not the apology fallback.",
+    "Investigate and remove any leftover reference to upload_tor (AttributeError appearing in supervisor backend log).",
+    "Improve error handling for AI endpoints: when Gemini fails, return 502/503 or include a structured 'ai_status':'unavailable' field so the UI can show a proper error rather than fallback strings."
+  ],
+  "critical_code_review_comments": [
+    "core/upload_views.py mixes async functions (run_full_evaluation, process_tor_ocr_async) with synchronous Django ORM — this is the direct cause of process_application 500s and broken OCR. Use sync_to_async or restructure.",
+    "Bare 'except Exception' clauses (recommend_course, chat_message, run_full_evaluation) swallow real errors and convert them into 200 OK responses with cosmetic fallbacks. This hides the Gemini quota outage from clients and operators.",
+    "core/views.py is ~360 lines and OK; core/upload_views.py is ~487 lines but already focused — fine for now.",
+    "Auth: register/login look correct; google_auth correctly uses GOOGLE_CLIENT_ID from settings (no hardcoding).",
+    "ApplicationViewSet.create silently auto-assigns BSIT if program_id missing; consider returning 400 instead, or at least adding a response field indicating auto-assignment.",
+    "SubjectMatchViewSet.flag/approve/reject/override correctly enforces role checks. Good.",
+    "No explicit input validation (Pydantic-style) on upload_views — they use request.data.get with default empty strings. Consider using DRF serializers for these endpoints to validate types (years must be float, etc.).",
+    "ChatConversationViewSet uses permission_classes = [AllowAny] but filters queryset by request.user — anonymous users will see all conversations with user__isnull=True (a multi-tenant leak). Either require auth or scope by session id."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/__init__.py"
+  ],
+  "success_rate": {"backend": "90% (27/30 passed, 3 skipped due to dependency on broken process endpoint)", "frontend": "not tested (out of scope)"},
+  "test_credentials": "applicant@test.com / applicant123, evaluator@citu.edu / evaluator123, admin@citu.edu / admin123 — all verified working.",
+  "seed_data_creation": "Tests created TEST_-prefixed users via /api/auth/register/, one Application (status finalized at end), one WorkExperience, two ApplicantDocuments (psa+job_description PNGs). No teardown implemented (DRF endpoints intentionally do not expose user/application delete). Subsequent runs will keep accumulating TEST_ users — consider adding an admin cleanup endpoint.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend URL: https://credit-match-ai.preview.emergentagent.com. Test file at /app/backend/tests/backend_test.py runs in ~57s. The 3 SKIPPED tests (TestMatchActions) will only run once /api/application/process/ is fixed AND a TOR document is OCR'd successfully (or matches are seeded manually). Database is Supabase Postgres — already seeded with BSIT program (1 program) and ~39 curriculum subjects. The two CRITICAL items (async-context + Gemini quota) must be fixed together; even after the async fix, run_full_evaluation will record empty matches because Gemini quota=0 on the current key.",
+  "rca_of_the_issue": "1) /api/application/process/ failure: process_application calls asyncio.run(run_full_evaluation(application_id)). Inside that coroutine, every line like `Application.objects.get`, `SubjectMatch.objects.filter().delete()`, `application.save()` is a synchronous ORM operation. Django (since 3.1) raises SynchronousOnlyOperation when sync ORM is invoked while an event loop is running; DRF surfaces this as 500. Reproduction: POST /api/application/process/ with any application_id as the owning applicant — always 500. Mitigation: from asgiref.sync import sync_to_async; replace each ORM call with `await sync_to_async(...)(...)` or move ORM into a sync helper called via `await sync_to_async(helper)()`. Cleanest fix: convert run_full_evaluation to a regular sync function and use `from asgiref.sync import async_to_sync` only around `gemini_service.recommend_program / match_subject / match_work_experience` awaits. 2) Gemini failure: model 'gemini-3.1-pro' on the configured GEMINI_API_KEY has free-tier quota=0. Use a key with billing enabled or route through EMERGENT_LLM_KEY/emergentintegrations."
+}
