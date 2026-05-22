@@ -1,0 +1,101 @@
+{
+  "theme": "Light",
+  "archetype": "Swiss & High-Contrast (Institutional Academic Variant)",
+  "colors": {
+    "primary": "#7a1e2b",
+    "primary_foreground": "#ffffff",
+    "accent": "#d4a747",
+    "accent_foreground": "#1a1a1a",
+    "background": "#ffffff",
+    "surface": "#fafafa",
+    "surface_border": "#e5e7eb",
+    "text_main": "#1a1a1a",
+    "text_muted": "#4b5563",
+    "status": {
+      "success": "#16A34A",
+      "warning": "#EAB308",
+      "error": "#DC2626"
+    }
+  },
+  "typography": {
+    "headings": {
+      "family": "Playfair Display",
+      "style": "serif",
+      "weights": ["400", "600", "700"]
+    },
+    "body": {
+      "family": "Inter",
+      "style": "sans-serif",
+      "weights": ["400", "500", "600"]
+    },
+    "mono": {
+      "family": "JetBrains Mono",
+      "style": "monospace",
+      "weights": ["400"]
+    }
+  },
+  "layout_spacing": {
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "section": "py-16 md:py-24 lg:py-32",
+    "card_padding": "p-6 sm:p-8",
+    "gap": "gap-6 md:gap-8",
+    "border_radius": "rounded-lg"
+  },
+  "components": {
+    "buttons": "solid primary for main CTAs, outline text-primary for secondary. rounded-md.",
+    "cards": "bg-white border border-gray-200 shadow-sm rounded-lg. No heavy drop shadows.",
+    "tables": "shadcn table with hover effects. header text muted and uppercase.",
+    "badges": "rounded-full px-2.5 py-0.5 text-xs font-semibold. Status specific coloring.",
+    "chatbot": "Floating action button in bottom right. Card-based modal interface."
+  },
+  "images": {
+    "hero_background": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/99efe192-1f37-4bf2-8dc2-0ee6bd12bd94/images/f2f49ed31fb2ec1383fa9c91592f1d86a75023707ad0c3f4634bc09e55ad9011.png",
+      "description": "Abstract maroon and gold academic background"
+    },
+    "ocr_illustration": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/99efe192-1f37-4bf2-8dc2-0ee6bd12bd94/images/ea49d5a50a4a4ca13d79af5e60511acb28bd77374b2dd5b8b0db9ce4978ffeef.png",
+      "description": "AI Document scanning illustration for TOR upload page"
+    },
+    "logo": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/99efe192-1f37-4bf2-8dc2-0ee6bd12bd94/images/95689f9ee6f8900936a9a9e7a8df18bdd3690e99ac2a074d2a77cb7d3eb956af.png",
+      "description": "Acredia modern university shield logo"
+    },
+    "university_students": {
+      "url": "https://images.unsplash.com/photo-1576495199011-eb94736d05d6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODh8MHwxfHNlYXJjaHwxfHx1bml2ZXJzaXR5JTIwY2FtcHVzJTIwc3R1ZGVudHN8ZW58MHx8fHwxNzc5NDIwNTk2fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Students walking on campus, useful for landing page sections"
+    }
+  },
+  "pages": [
+    {
+      "name": "Landing Page",
+      "description": "Hero section with background image, university branding, and clear CTAs for Login / Guest Access."
+    },
+    {
+      "name": "Applicant Dashboard",
+      "description": "Bento grid layout for application status, document upload (TOR), and subject matching overview."
+    },
+    {
+      "name": "Evaluator Panel",
+      "description": "Side-by-side view: left side shows uploaded TOR document preview, right side shows AI match panel with color-coded scores."
+    },
+    {
+      "name": "Admin Dashboard",
+      "description": "Data-heavy tables for managing curricula, applications, users, and reports."
+    }
+  ],
+  "accessibility": {
+    "contrast": "Ensure text over primary maroon background meets APCA contrast standards. Use white text.",
+    "interactive": "Include hover and focus states for all clickable elements. Focus rings should use accent gold."
+  },
+  "instructions_to_main_agent": [
+    "Use pure HTML + Tailwind for marketing/landing page layouts. Avoid over-using Shadcn layout components like Cards for creative sections.",
+    "For the Applicant and Evaluator dashboards, use Shadcn tables, select, tabs, and modals.",
+    "Implement the side-by-side evaluator panel utilizing CSS Grid (grid-cols-2).",
+    "Integrate the provided Acredia logo in the top left navigation bar.",
+    "Ensure all buttons have specific data-testid attributes (e.g., data-testid='upload-tor-button').",
+    "Use Playfair Display for all main headers (h1, h2, h3) and Inter for all body text.",
+    "Color code the Match results: Green for >= 85, Yellow for 60-84, Red for < 60.",
+    "Use Phosphor icons or lucide-react for iconography. Install necessary packages if needed."
+  ]
+}
