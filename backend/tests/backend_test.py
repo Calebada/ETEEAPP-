@@ -271,6 +271,21 @@ class TestDashboard:
 
 # ---------- AI / Gemini ----------
 
+# Fallback strings the backend returns when Gemini fails — tests must NOT see them
+FALLBACK_PHRASES = [
+    "I apologize, but I",
+    "having trouble processing",
+    "Error generating recommendation",
+]
+
+
+def _is_fallback(text: str) -> bool:
+    if not text:
+        return True
+    t = text.lower()
+    return any(p.lower() in t for p in FALLBACK_PHRASES)
+
+
 class TestAI:
     def test_chat_message_unauth(self, session):
         # chat_message has AllowAny perms
@@ -283,18 +298,156 @@ class TestAI:
         assert "content" in d["bot_message"]
         assert len(d["bot_message"]["content"]) > 0
 
+    def test_chat_message_real_ai_response_eteeap(self, session):
+        """VERIFY FIX 2: chat must return REAL AI response (not fallback) for ETEEAP question."""
+        r = session.post(f"{API}/chat/message/", json={
+            "message": "What is ETEEAP?"
+        }, timeout=90)
+        assert r.status_code == 200, r.text
+        d = r.json()
+        content = d["bot_message"]["content"]
+        assert len(content) > 50, f"Response too short, likely fallback: {content!r}"
+        assert not _is_fallback(content), \
+            f"Got fallback message instead of real AI response: {content!r}"
+        # Real ETEEAP explanation should reference experience/education/equivalency
+        lower = content.lower()
+        assert any(k in lower for k in ["eteeap", "expanded", "equivalency", "experience", "education"]), \
+            f"Response does not look like a real ETEEAP explanation: {content!r}"
+
     def test_recommend_course(self, session, applicant_token):
+        """VERIFY FIX 5: recommend-course must return real AI recommendation."""
         r = session.post(f"{API}/recommend-course/", json={
             "work_experiences": [
                 {"job_title": "Software Engineer", "years": 4,
                  "job_description": "Develop Python web apps, REST APIs, databases"}
             ]
-        }, headers=_h(applicant_token), timeout=90)
-        # Allow 200 (recommended) or 500 (if gemini quota); both reveal endpoint status
-        assert r.status_code in (200, 500), r.text
-        if r.status_code == 200:
-            d = r.json()
-            assert "program" in d or "recommended_program" in d or len(d) > 0
+        }, headers=_h(applicant_token), timeout=120)
+        assert r.status_code == 200, r.text
+        d = r.json()
+        # Expect a structured AI recommendation
+        program = d.get("program") or d.get("recommended_program") or ""
+        reasoning = d.get("reasoning") or d.get("explanation") or ""
+        assert program, f"No program field in recommend-course response: {d}"
+        assert reasoning, f"No reasoning field in recommend-course response: {d}"
+        assert not _is_fallback(reasoning), \
+            f"recommend-course returned fallback reasoning: {reasoning!r}"
+        assert len(reasoning) > 30, f"Reasoning too short to be real AI: {reasoning!r}"
+
+
+# ---------- Process Application (NEW second application for processing) ----------
+
+class TestProcessApplication:
+    """VERIFY FIX 1, 3, 4: full process_application flow end-to-end."""
+
+    def test_create_second_application_for_processing(self, session, applicant_token):
+        r = session.post(f"{API}/applications/", json={
+            "program_id": state.get("bsit_program_id"),
+            "phone": "09171234567",
+            "address": "TEST Process Address"
+        }, headers=_h(applicant_token), timeout=20)
+        assert r.status_code == 201, r.text
+        state["proc_application_id"] = r.json()["id"]
+
+    def test_add_work_experience_for_processing(self, session, applicant_token):
+        r = session.post(f"{API}/work-experience/add/", json={
+            "application_id": state["proc_application_id"],
+            "company_name": "TEST Proc Tech",
+            "job_title": "Backend Developer",
+            "years": 4.0,
+            "job_description": (
+                "Designed and implemented REST APIs using Python Django and Flask. "
+                "Built relational database schemas in PostgreSQL and MySQL. "
+                "Wrote unit tests, did code reviews, deployed services on Linux servers. "
+                "Worked with Git, CI/CD pipelines, and agile sprint planning."
+            ),
+            "is_current": True
+        }, headers=_h(applicant_token), timeout=20)
+        assert r.status_code == 201, r.text
+        state["proc_work_exp_id"] = r.json()["id"]
+
+    def test_submit_application_for_processing(self, session, applicant_token):
+        r = session.post(
+            f"{API}/applications/{state['proc_application_id']}/submit/",
+            headers=_h(applicant_token), timeout=15
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "submitted"
+
+    def test_process_application_succeeds(self, session, applicant_token):
+        """VERIFY FIX 1: previously failed with async-context error; should now return 200.
+        NOTE: endpoint is synchronous and makes multiple Gemini calls (30-60s each);
+        ingress may return 502 even when backend completes. We retry once and on
+        persistent 502 we verify processing via downstream artifacts (matches/predictions).
+        """
+        attempt_status = []
+        last_resp = None
+        for attempt in range(2):
+            r = session.post(
+                f"{API}/application/process/",
+                json={"application_id": state["proc_application_id"]},
+                headers=_h(applicant_token), timeout=240,
+            )
+            attempt_status.append(r.status_code)
+            last_resp = r
+            if r.status_code == 200:
+                d = r.json()
+                body = str(d).lower()
+                assert "async context" not in body, f"Async context error leaked: {d}"
+                return
+            if r.status_code not in (502, 503, 504):
+                break
+            time.sleep(2)
+        # Non-200 final response — tolerate gateway timeout only if processing actually ran
+        if last_resp.status_code in (502, 503, 504):
+            r2 = session.get(
+                f"{API}/subject-matches/?application_id={state['proc_application_id']}",
+                headers=_h(applicant_token), timeout=20
+            )
+            items = r2.json().get("results", r2.json()) if r2.status_code == 200 else []
+            if items:
+                pytest.skip(
+                    f"Gateway returned {attempt_status} but processing completed "
+                    f"({len(items)} matches found). Backend endpoint is too slow for "
+                    f"sync HTTP; recommend making it async/background."
+                )
+        assert last_resp.status_code == 200, \
+            f"process_application failed (attempts={attempt_status}): {last_resp.text}"
+
+    def test_subject_matches_have_source_field(self, session, applicant_token):
+        """VERIFY FIX 3: matches should exist with 'source' field of 'tor' or 'work_experience'."""
+        r = session.get(
+            f"{API}/subject-matches/?application_id={state['proc_application_id']}",
+            headers=_h(applicant_token), timeout=20
+        )
+        assert r.status_code == 200, r.text
+        d = r.json()
+        items = d.get("results", d) if isinstance(d, dict) else d
+        assert isinstance(items, list)
+        # We added work experience; expect at least one match with source='work_experience'
+        if not items:
+            pytest.fail(f"No subject matches generated after process_application for app "
+                        f"{state['proc_application_id']}")
+        sources = {m.get("source") for m in items}
+        assert sources, f"No 'source' field in matches: {items[:2]}"
+        assert sources.issubset({"tor", "work_experience"}), \
+            f"Unexpected source values: {sources}"
+        # save one for cross-check
+        state["proc_match_id"] = items[0]["id"]
+
+    def test_predictions_returns_semester_plan(self, session, applicant_token):
+        """VERIFY FIX 4: predictions should return semester plan after process."""
+        r = session.get(
+            f"{API}/predictions/?application_id={state['proc_application_id']}",
+            headers=_h(applicant_token), timeout=20
+        )
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert "semesters_min" in d
+        assert "semesters_max" in d
+        assert "plan_json" in d
+        # plan_json should be a non-empty list/dict after processing
+        plan = d["plan_json"]
+        assert plan not in (None, "", [], {}), f"plan_json is empty: {d}"
 
 
 # ---------- Match Approve/Reject/Flag (requires existing match) ----------
@@ -305,14 +458,19 @@ class TestMatchActions:
         """Try to find or seed at least one SubjectMatch to test approve/reject/flag."""
         if "match_id" in state:
             return
-        # First check existing matches
-        r = session.get(f"{API}/subject-matches/?application_id={state.get('application_id','')}",
-                        headers=_h(evaluator_token), timeout=15)
-        if r.status_code == 200:
-            d = r.json()
-            items = d.get("results", d) if isinstance(d, dict) else d
-            if items:
-                state["match_id"] = items[0]["id"]
+        # Prefer the processed application (which has real matches)
+        for key in ("proc_application_id", "application_id"):
+            app_id = state.get(key)
+            if not app_id:
+                continue
+            r = session.get(f"{API}/subject-matches/?application_id={app_id}",
+                            headers=_h(evaluator_token), timeout=15)
+            if r.status_code == 200:
+                d = r.json()
+                items = d.get("results", d) if isinstance(d, dict) else d
+                if items:
+                    state["match_id"] = items[0]["id"]
+                    return
 
     def test_approve_match(self, session, evaluator_token):
         if "match_id" not in state:

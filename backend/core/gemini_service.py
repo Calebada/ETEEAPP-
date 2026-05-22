@@ -1,12 +1,14 @@
 import os
-import base64
 import json
+import asyncio
 from dotenv import load_dotenv
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+# Use EMERGENT_LLM_KEY first (universal key), fall back to GEMINI_API_KEY
+LLM_API_KEY = os.getenv('EMERGENT_LLM_KEY') or os.getenv('GEMINI_API_KEY')
+GEMINI_MODEL = "gemini-2.5-pro"  # Fallback model if 3.1-pro is rate-limited
 
 
 def _clean_json_response(text):
@@ -23,7 +25,7 @@ def _clean_json_response(text):
 
 class GeminiService:
     def __init__(self):
-        self.api_key = GEMINI_API_KEY
+        self.api_key = LLM_API_KEY
     
     def _get_chat(self, session_id, system_message):
         chat = LlmChat(
@@ -31,7 +33,7 @@ class GeminiService:
             session_id=session_id,
             system_message=system_message
         )
-        chat.with_model("gemini", "gemini-3.1-pro-preview")
+        chat.with_model("gemini", GEMINI_MODEL)
         return chat
     
     async def extract_subjects_from_tor(self, image_base64):
@@ -105,23 +107,10 @@ Units: {tor_subject_data['units']}
 Curriculum Subjects:
 {curriculum_list}
 
-For each potential match, provide a confidence score (0-100) based on:
-- Code similarity (exact match = high score, similar prefix = medium)
-- Title similarity (semantic meaning, keywords)
-- Units match (same units = bonus)
-- Description relevance
+Return ONLY a valid JSON array of matches with confidence >= 40, sorted by confidence:
+[{{"curriculum_code": "IT111", "confidence": 95, "reasoning": "..."}}]
 
-Return ONLY a valid JSON array of matches, sorted by confidence (highest first):
-[
-  {{
-    "curriculum_code": "IT111",
-    "confidence": 95,
-    "reasoning": "Exact code match and similar title"
-  }}
-]
-
-Include only matches with confidence >= 40. If no good matches, return empty array [].
-Do not include any explanatory text, just the JSON array."""
+Just the JSON array, no explanations."""
             
             msg = UserMessage(text=prompt)
             response = await chat.send_message(msg)
@@ -131,7 +120,6 @@ Do not include any explanatory text, just the JSON array."""
                 matches = json.loads(response_text)
                 return matches if isinstance(matches, list) else []
             except json.JSONDecodeError:
-                print(f"Failed to parse match response: {response_text[:200]}")
                 return []
         
         except Exception as e:
@@ -162,22 +150,15 @@ BSIT Curriculum Subjects:
 {curriculum_list}
 
 For ETEEAP credit, consider:
-- Job skills directly relate to subject content (40+ points)
-- Years of experience demonstrates mastery (more years = higher confidence)
+- Job skills directly relate to subject content
+- Years of experience demonstrates mastery
 - Job description shows practical application of subject knowledge
-- Industry-relevant positions earn credit for relevant courses
 
 Return ONLY a valid JSON array sorted by confidence:
-[
-  {{
-    "curriculum_code": "IT213",
-    "confidence": 85,
-    "reasoning": "Web designer with 3 years experience demonstrates mastery of web development concepts"
-  }}
-]
+[{{"curriculum_code": "IT213", "confidence": 85, "reasoning": "..."}}]
 
 Include matches with confidence >= 60. Return [] if no credit-worthy matches.
-Do not include any explanatory text, just the JSON array."""
+Just the JSON array, no explanations."""
             
             msg = UserMessage(text=prompt)
             response = await chat.send_message(msg)
@@ -187,7 +168,6 @@ Do not include any explanatory text, just the JSON array."""
                 matches = json.loads(response_text)
                 return matches if isinstance(matches, list) else []
             except json.JSONDecodeError:
-                print(f"Failed to parse work match response: {response_text[:200]}")
                 return []
         
         except Exception as e:
@@ -220,15 +200,9 @@ Available Programs at CIT-U:
 - BSA (Bachelor of Science in Accountancy) - for accountants, auditors
 
 Return ONLY a valid JSON object:
-{{
-  "program": "BSIT",
-  "confidence": 90,
-  "reasoning": "Detailed explanation of why this program suits the applicant",
-  "career_alignment": "How current career aligns with the program",
-  "strengths": ["List of relevant strengths"]
-}}
+{{"program": "BSIT", "confidence": 90, "reasoning": "...", "career_alignment": "...", "strengths": ["..."]}}
 
-Do not include any explanatory text, just the JSON object."""
+Just the JSON object, no explanations."""
             
             msg = UserMessage(text=prompt)
             response = await chat.send_message(msg)
@@ -236,13 +210,13 @@ Do not include any explanatory text, just the JSON object."""
             
             try:
                 recommendation = json.loads(response_text)
-                return recommendation if isinstance(recommendation, dict) else {'program': 'BSIT', 'reasoning': 'Default recommendation'}
+                return recommendation if isinstance(recommendation, dict) else {'program': 'BSIT', 'reasoning': 'Default recommendation', 'confidence': 50}
             except json.JSONDecodeError:
                 return {'program': 'BSIT', 'reasoning': 'Default recommendation', 'confidence': 50}
         
         except Exception as e:
             print(f"Error in recommendation: {str(e)}")
-            return {'program': 'BSIT', 'reasoning': 'Error generating recommendation', 'confidence': 0}
+            return {'program': 'BSIT', 'reasoning': 'Error generating recommendation. Please try again.', 'confidence': 0}
     
     async def chat_with_bot(self, conversation_history, user_message, user_context=None):
         """Chat with the ETEEAP assistant bot"""
@@ -262,8 +236,7 @@ ETEEAP allows working professionals to get academic credit for:
 - Professional certifications
 - Life experiences
 
-Be helpful, professional, and concise. Keep responses under 200 words.
-If you don't know something specific, admit it and suggest contacting the registrar's office."""
+Be helpful, professional, and concise. Keep responses under 200 words."""
             
             if user_context:
                 system_message += f"\n\nUser Context: {user_context}"

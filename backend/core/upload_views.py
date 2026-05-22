@@ -4,8 +4,8 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
+from asgiref.sync import async_to_sync
 import base64
-import asyncio
 import uuid
 import json
 
@@ -26,7 +26,6 @@ from .gemini_service import gemini_service
 def upload_document(request):
     """
     Upload any document (TOR, PSA, Job Description, etc.)
-    Expects: application_id, document_type, file_name, file_data (base64), mime_type
     """
     application_id = request.data.get('application_id')
     document_type = request.data.get('document_type', 'other')
@@ -73,13 +72,11 @@ def upload_document(request):
         ocr_status='pending' if document_type == 'tor' else 'not_applicable'
     )
     
-    # Process based on document type
-    file_base64 = base64.b64encode(file_content).decode('utf-8')
-    
+    # Process TOR with OCR (synchronous wrapper around async Gemini call)
     if document_type == 'tor':
-        # Process TOR with OCR
         try:
-            asyncio.run(process_tor_ocr_async(doc.id, file_base64))
+            file_base64 = base64.b64encode(file_content).decode('utf-8')
+            process_tor_ocr_sync(doc.id, file_base64)
         except Exception as e:
             print(f"OCR error: {e}")
             doc.ocr_status = 'failed'
@@ -91,20 +88,21 @@ def upload_document(request):
     )
 
 
-async def process_tor_ocr_async(doc_id, image_base64):
-    """Process OCR on TOR document"""
+def process_tor_ocr_sync(doc_id, image_base64):
+    """Synchronous wrapper for OCR processing"""
     try:
         doc = ApplicantDocument.objects.get(id=doc_id)
         doc.ocr_status = 'processing'
         doc.save()
         
-        subjects_data = await gemini_service.extract_subjects_from_tor(image_base64)
+        # Call async Gemini service synchronously
+        subjects_data = async_to_sync(gemini_service.extract_subjects_from_tor)(image_base64)
         
         doc.ocr_raw = json.dumps(subjects_data) if subjects_data else ''
         doc.extracted_text = json.dumps(subjects_data) if subjects_data else ''
         
         # Create TOR subject records
-        for subject_data in subjects_data:
+        for subject_data in (subjects_data or []):
             if subject_data.get('code') and subject_data.get('code') != 'UNCLEAR':
                 TORSubject.objects.create(
                     application=doc.application,
@@ -131,9 +129,7 @@ async def process_tor_ocr_async(doc_id, image_base64):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def add_work_experience(request):
-    """
-    Add work experience to an application
-    """
+    """Add work experience to an application"""
     application_id = request.data.get('application_id')
     
     try:
@@ -182,35 +178,35 @@ def process_application(request):
     application.save()
     
     try:
-        # Run all AI processing
-        asyncio.run(run_full_evaluation(application.id))
-        
+        run_full_evaluation_sync(str(application.id))
         application.refresh_from_db()
         return Response({
             'message': 'Application processed successfully',
             'application': ApplicationSerializer(application).data
         })
     except Exception as e:
+        print(f"Process application error: {str(e)}")
         application.status = 'submitted'
         application.save()
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-async def run_full_evaluation(application_id):
-    """Run full AI evaluation: course recommendation, TOR matching, work experience matching"""
+def run_full_evaluation_sync(application_id):
+    """Run full AI evaluation - SYNC version with sync ORM and async_to_sync for Gemini calls"""
     application = Application.objects.get(id=application_id)
     
     # Clear existing matches
     SubjectMatch.objects.filter(application=application).delete()
     
-    work_experiences = list(WorkExperience.objects.filter(application=application).values(
+    work_experiences_list = list(WorkExperience.objects.filter(application=application).values(
         'job_title', 'years', 'job_description'
     ))
+    work_exp_objects = list(WorkExperience.objects.filter(application=application))
     
     # Step 1: Course Recommendation based on work experience
-    if work_experiences:
+    if work_experiences_list:
         try:
-            recommendation = await gemini_service.recommend_program(work_experiences)
+            recommendation = async_to_sync(gemini_service.recommend_program)(work_experiences_list)
             application.recommended_program = recommendation.get('program', 'BSIT')
             application.recommendation_reasoning = recommendation.get('reasoning', '')
             application.save()
@@ -218,10 +214,9 @@ async def run_full_evaluation(application_id):
             print(f"Recommendation error: {e}")
     
     # Step 2: Match TOR subjects to curriculum
-    tor_subjects = TORSubject.objects.filter(application=application)
-    curriculum_list = list(CurriculumSubject.objects.filter(program=application.program).values(
-        'id', 'code', 'title', 'description', 'units'
-    ))
+    tor_subjects = list(TORSubject.objects.filter(application=application))
+    curriculum_qs = CurriculumSubject.objects.filter(program=application.program)
+    curriculum_list = list(curriculum_qs.values('id', 'code', 'title', 'description', 'units'))
     
     # Convert UUIDs to strings for JSON serialization
     for c in curriculum_list:
@@ -235,7 +230,7 @@ async def run_full_evaluation(application_id):
         }
         
         try:
-            matches = await gemini_service.match_subject(tor_data, curriculum_list)
+            matches = async_to_sync(gemini_service.match_subject)(tor_data, curriculum_list)
             
             if matches and len(matches) > 0:
                 best_match = matches[0]
@@ -267,43 +262,41 @@ async def run_full_evaluation(application_id):
             print(f"TOR matching error for {tor_subject.code}: {e}")
     
     # Step 3: Match work experience to curriculum
-    if work_experiences:
-        for work_exp in WorkExperience.objects.filter(application=application):
-            try:
-                exp_data = {
-                    'job_title': work_exp.job_title,
-                    'years': work_exp.years,
-                    'description': work_exp.job_description
-                }
+    for work_exp in work_exp_objects:
+        try:
+            exp_data = {
+                'job_title': work_exp.job_title,
+                'years': work_exp.years,
+                'description': work_exp.job_description
+            }
+            
+            work_matches = async_to_sync(gemini_service.match_work_experience)(exp_data, curriculum_list)
+            
+            for match in (work_matches or [])[:5]:
+                curriculum_subj = CurriculumSubject.objects.filter(
+                    code=match['curriculum_code'],
+                    program=application.program
+                ).first()
                 
-                work_matches = await gemini_service.match_work_experience(exp_data, curriculum_list)
-                
-                for match in work_matches[:5]:  # Top 5 matches
-                    curriculum_subj = CurriculumSubject.objects.filter(
-                        code=match['curriculum_code'],
-                        program=application.program
+                if curriculum_subj:
+                    existing = SubjectMatch.objects.filter(
+                        application=application,
+                        curriculum_subject=curriculum_subj,
+                        source='tor'
                     ).first()
                     
-                    if curriculum_subj:
-                        # Check if already matched from TOR
-                        existing = SubjectMatch.objects.filter(
+                    if not existing:
+                        SubjectMatch.objects.create(
                             application=application,
+                            work_experience=work_exp,
                             curriculum_subject=curriculum_subj,
-                            source='tor'
-                        ).first()
-                        
-                        if not existing:
-                            SubjectMatch.objects.create(
-                                application=application,
-                                work_experience=work_exp,
-                                curriculum_subject=curriculum_subj,
-                                source='work_experience',
-                                confidence=float(match.get('confidence', 0)),
-                                matching_reason=match.get('reasoning', ''),
-                                status='pending'
-                            )
-            except Exception as e:
-                print(f"Work matching error: {e}")
+                            source='work_experience',
+                            confidence=float(match.get('confidence', 0)),
+                            matching_reason=match.get('reasoning', ''),
+                            status='pending'
+                        )
+        except Exception as e:
+            print(f"Work matching error: {e}")
     
     # Step 4: Generate prediction
     try:
@@ -350,7 +343,6 @@ async def run_full_evaluation(application_id):
                 'total_units': current_units
             })
         
-        # Delete existing predictions
         Prediction.objects.filter(application=application).delete()
         Prediction.objects.create(
             application=application,
@@ -368,16 +360,14 @@ async def run_full_evaluation(application_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def recommend_course(request):
-    """
-    Recommend a course based on work experience (without saving)
-    """
+    """Recommend a course based on work experience (without saving)"""
     work_experiences = request.data.get('work_experiences', [])
     
     if not work_experiences:
         return Response({'error': 'work_experiences required'}, status=status.HTTP_400_BAD_REQUEST)
     
     try:
-        recommendation = asyncio.run(gemini_service.recommend_program(work_experiences))
+        recommendation = async_to_sync(gemini_service.recommend_program)(work_experiences)
         return Response(recommendation)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -386,9 +376,7 @@ def recommend_course(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def chat_message(request):
-    """
-    Send message to chatbot and get response
-    """
+    """Send message to chatbot and get response"""
     conversation_id = request.data.get('conversation_id')
     message = request.data.get('message')
     
@@ -425,16 +413,15 @@ def chat_message(request):
         if applications.exists():
             user_context = f"User has {applications.count()} application(s). Latest status: {applications.first().status}"
     
-    # Get bot response
+    # Get bot response (sync wrapper around async Gemini call)
     try:
-        bot_response = asyncio.run(
-            gemini_service.chat_with_bot(
-                conversation_history=[],
-                user_message=message,
-                user_context=user_context
-            )
+        bot_response = async_to_sync(gemini_service.chat_with_bot)(
+            conversation_history=[],
+            user_message=message,
+            user_context=user_context
         )
     except Exception as e:
+        print(f"Chat error: {e}")
         bot_response = "I apologize, but I'm having trouble right now. Please try again."
     
     # Save bot response
