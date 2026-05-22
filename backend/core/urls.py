@@ -20,6 +20,7 @@ urlpatterns = [
     path('auth/me/', views.me, name='me'),
     path('dashboard/stats/', views.dashboard_stats, name='dashboard-stats'),
     path('upload/document/', upload_views.upload_document, name='upload-document'),
+    path('documents/<uuid:document_id>/preview/', upload_views.preview_document, name='preview-document'),
     path('work-experience/add/', upload_views.add_work_experience, name='add-work-experience'),
     path('application/process/', upload_views.process_application, name='process-application'),
     path('recommend-course/', upload_views.recommend_course, name='recommend-course'),

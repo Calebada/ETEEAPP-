@@ -4,10 +4,12 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
+from django.http import FileResponse, Http404
 from asgiref.sync import async_to_sync
 import base64
 import uuid
 import json
+import os
 
 from .models import (
     Application, TORDocument, TORSubject,
@@ -19,6 +21,35 @@ from .serializers import (
     ApplicantDocumentSerializer, ApplicationSerializer
 )
 from .gemini_service import gemini_service
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def preview_document(request, document_id):
+    """
+    Stream the document file for preview.
+    Applicants can view their own docs; evaluators/admins can view any doc.
+    """
+    try:
+        doc = ApplicantDocument.objects.get(id=document_id)
+    except ApplicantDocument.DoesNotExist:
+        return Response({'error': 'Document not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Permission check
+    user = request.user
+    if user.role not in ['evaluator', 'admin'] and doc.application.applicant != user:
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    
+    if not default_storage.exists(doc.file_path):
+        return Response({'error': 'File not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+    
+    try:
+        file_obj = default_storage.open(doc.file_path, 'rb')
+        response = FileResponse(file_obj, content_type=doc.mime_type or 'application/octet-stream')
+        response['Content-Disposition'] = f'inline; filename="{doc.file_name}"'
+        return response
+    except Exception as e:
+        return Response({'error': f'Failed to open file: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])

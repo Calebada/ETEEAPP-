@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { ChatbotWidget } from '../components/ChatbotWidget';
+import { DocumentPreviewModal } from '../components/DocumentPreviewModal';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -10,7 +11,7 @@ import { Textarea } from '../components/ui/textarea';
 import { applicationApi, subjectMatchApi, predictionApi } from '../lib/api';
 import {
   ArrowLeft, Loader2, FileText, Briefcase, CheckCircle2, XCircle,
-  AlertCircle, BookOpen, User, Calendar, MapPin, Phone, Sparkles, Flag
+  AlertCircle, BookOpen, User, Calendar, MapPin, Phone, Sparkles, Flag, Eye
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -23,6 +24,7 @@ export const EvaluatorReviewPage = () => {
   const [loading, setLoading] = useState(true);
   const [evaluatorNote, setEvaluatorNote] = useState('');
   const [actioning, setActioning] = useState(false);
+  const [previewDoc, setPreviewDoc] = useState(null);
 
   useEffect(() => {
     loadData();
@@ -200,13 +202,28 @@ export const EvaluatorReviewPage = () => {
               <div className="space-y-2">
                 {application?.documents?.length > 0 ? (
                   application.documents.map((doc) => (
-                    <div key={doc.id} className="text-xs bg-gray-50 rounded p-2" data-testid={`doc-${doc.id}`}>
-                      <div className="flex items-center justify-between">
-                        <Badge variant="outline" className="text-xs capitalize">{doc.document_type}</Badge>
-                        {doc.ocr_status === 'completed' && <CheckCircle2 className="w-3 h-3 text-green-600" />}
+                    <button 
+                      key={doc.id} 
+                      onClick={() => setPreviewDoc(doc)}
+                      className="w-full text-left text-xs bg-gray-50 hover:bg-maroon/5 hover:border-maroon/30 border border-transparent rounded p-2 smooth-transition group" 
+                      data-testid={`doc-preview-${doc.id}`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <Badge variant="outline" className="text-xs capitalize">
+                          {doc.document_type?.replace('_', ' ')}
+                        </Badge>
+                        <div className="flex items-center gap-1">
+                          {doc.ocr_status === 'completed' && <CheckCircle2 className="w-3 h-3 text-green-600" />}
+                          {doc.ocr_status === 'processing' && <Loader2 className="w-3 h-3 animate-spin text-yellow-600" />}
+                          {doc.ocr_status === 'failed' && <XCircle className="w-3 h-3 text-red-600" />}
+                          <Eye className="w-3 h-3 text-gray-400 group-hover:text-maroon" />
+                        </div>
                       </div>
-                      <div className="mt-1 truncate">{doc.file_name}</div>
-                    </div>
+                      <div className="truncate font-medium text-gray-800">{doc.file_name}</div>
+                      <div className="text-[10px] text-gray-500 mt-0.5">
+                        {Math.round((doc.file_size || 0) / 1024)} KB · Click to preview
+                      </div>
+                    </button>
                   ))
                 ) : (
                   <p className="text-xs text-gray-500">No documents</p>
@@ -324,6 +341,11 @@ export const EvaluatorReviewPage = () => {
       </div>
 
       <ChatbotWidget />
+      <DocumentPreviewModal 
+        document={previewDoc} 
+        open={!!previewDoc} 
+        onClose={() => setPreviewDoc(null)} 
+      />
     </div>
   );
 };

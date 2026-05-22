@@ -159,6 +159,19 @@ class ApplicationViewSet(viewsets.ModelViewSet):
         application = self.get_object()
         if application.applicant != request.user:
             return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Enforce TOR requirement
+        from .models import ApplicantDocument
+        has_tor = ApplicantDocument.objects.filter(
+            application=application, 
+            document_type='tor'
+        ).exists()
+        if not has_tor:
+            return Response(
+                {'error': 'Transcript of Records (TOR) is required before submission.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         application.status = 'submitted'
         application.save()
         return Response(ApplicationSerializer(application).data)

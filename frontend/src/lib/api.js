@@ -56,6 +56,8 @@ export const applicationApi = {
 export const documentApi = {
   list: (applicationId) => apiClient.get(`/documents/?application_id=${applicationId}`),
   upload: (data) => apiClient.post('/upload/document/', data),
+  previewUrl: (documentId) => `${API}/documents/${documentId}/preview/`,
+  preview: (documentId) => apiClient.get(`/documents/${documentId}/preview/`, { responseType: 'blob' }),
 };
 
 export const workExperienceApi = {

@@ -159,6 +159,12 @@ export const ApplyPage = () => {
   };
 
   const submitApplication = async () => {
+    if (documents.filter(d => d.document_type === 'tor').length === 0) {
+      toast.error('TOR is required. Please upload your Transcript of Records.');
+      setStep(2);
+      return;
+    }
+    
     setSubmitting(true);
     try {
       await applicationApi.submit(id);
@@ -294,13 +300,14 @@ export const ApplyPage = () => {
             
             <div className="grid md:grid-cols-2 gap-4">
               <DocumentUploadCard
-                title="Transcript of Records (TOR)"
-                description="Required - AI will extract your subjects"
+                title="Transcript of Records (TOR) *"
+                description="REQUIRED - AI will extract your subjects"
                 docType="tor"
                 docs={torDocs}
                 onUpload={(e) => handleFileUpload(e, 'tor')}
                 uploading={uploading}
                 primary
+                required
               />
               <DocumentUploadCard
                 title="PSA Birth Certificate"
@@ -327,6 +334,15 @@ export const ApplyPage = () => {
                 uploading={uploading}
               />
             </div>
+            
+            {torDocs.length === 0 && (
+              <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-2" data-testid="tor-required-warning">
+                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                <div className="text-sm text-red-800">
+                  <strong>TOR Required:</strong> You must upload your Transcript of Records before proceeding. The AI will extract your subjects for credit evaluation.
+                </div>
+              </div>
+            )}
             
             <div className="flex justify-between pt-6 mt-6 border-t border-gray-200">
               <Button variant="outline" onClick={() => setStep(1)} data-testid="step-2-back-btn">
@@ -540,10 +556,18 @@ export const ApplyPage = () => {
               </div>
               
               {torDocs.length === 0 && (
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-2">
-                  <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-                  <div className="text-sm text-yellow-800">
-                    <strong>Warning:</strong> No TOR uploaded. We recommend uploading your transcript for accurate evaluation.
+                <div className="bg-red-50 border-2 border-red-300 rounded-lg p-4 flex items-start gap-2" data-testid="tor-missing-error">
+                  <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm text-red-800">
+                    <strong>TOR Required:</strong> You cannot submit this application without uploading your Transcript of Records.
+                    <Button 
+                      onClick={() => setStep(2)} 
+                      variant="link" 
+                      className="ml-2 p-0 h-auto text-red-700 underline"
+                      data-testid="goto-tor-upload-btn"
+                    >
+                      Upload TOR now →
+                    </Button>
                   </div>
                 </div>
               )}
@@ -556,7 +580,7 @@ export const ApplyPage = () => {
               </Button>
               <Button 
                 onClick={submitApplication}
-                disabled={submitting}
+                disabled={submitting || torDocs.length === 0}
                 className="bg-maroon hover:bg-maroon-dark text-white"
                 data-testid="submit-application-btn"
               >
@@ -576,8 +600,8 @@ export const ApplyPage = () => {
   );
 };
 
-const DocumentUploadCard = ({ title, description, docType, docs, onUpload, uploading, primary }) => (
-  <div className={`border rounded-lg p-4 ${primary ? 'border-maroon/30 bg-maroon/5' : 'border-gray-200'}`} data-testid={`upload-card-${docType}`}>
+const DocumentUploadCard = ({ title, description, docType, docs, onUpload, uploading, primary, required }) => (
+  <div className={`border rounded-lg p-4 ${primary ? 'border-maroon/30 bg-maroon/5' : 'border-gray-200'} ${required && docs.length === 0 ? 'border-red-300 bg-red-50/30' : ''}`} data-testid={`upload-card-${docType}`}>
     <div className="flex items-start justify-between mb-3">
       <div>
         <div className="font-semibold flex items-center gap-2">
@@ -586,11 +610,13 @@ const DocumentUploadCard = ({ title, description, docType, docs, onUpload, uploa
         </div>
         <div className="text-xs text-gray-600 mt-1">{description}</div>
       </div>
-      {docs.length > 0 && (
+      {docs.length > 0 ? (
         <Badge className="bg-green-100 text-green-700">
           {docs.length} uploaded
         </Badge>
-      )}
+      ) : required ? (
+        <Badge className="bg-red-100 text-red-700">Required</Badge>
+      ) : null}
     </div>
     
     {docs.length > 0 && (
