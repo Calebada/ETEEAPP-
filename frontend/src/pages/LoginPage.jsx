@@ -147,7 +147,7 @@ export const LoginPage = () => {
           <div className="mt-6 pt-6 border-t border-gray-200 text-xs text-gray-500">
             <div className="font-semibold mb-1">Demo Accounts:</div>
             <div>Applicant: applicant@test.com / applicant123</div>
-            <div>Evaluator: evaluator@citu.edu / evaluator123</div>
+            <div>Department Chair: chair@citu.edu / chair123</div>
             <div>Admin: admin@citu.edu / admin123</div>
           </div>
         </Card>

@@ -25,7 +25,7 @@ export const Navbar = () => {
     }
     if (user.role === 'evaluator') {
       return [
-        { label: 'Queue', path: '/evaluator', icon: LayoutDashboard },
+        { label: 'Review Queue', path: '/evaluator', icon: LayoutDashboard },
       ];
     }
     if (user.role === 'admin') {
@@ -93,7 +93,9 @@ export const Navbar = () => {
                     </Avatar>
                     <div className="hidden md:block text-left">
                       <div className="text-sm font-medium">{user.full_name}</div>
-                      <div className="text-xs text-gray-500 capitalize">{user.role}</div>
+                      <div className="text-xs text-gray-500 capitalize">
+                        {user.role === 'evaluator' ? 'Department Chair' : user.role}
+                      </div>
                     </div>
                   </Button>
                 </DropdownMenuTrigger>

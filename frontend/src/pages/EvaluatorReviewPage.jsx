@@ -93,6 +93,19 @@ export const EvaluatorReviewPage = () => {
     setActioning(false);
   };
 
+  const handleRunAI = async () => {
+    setActioning(true);
+    toast.info('Running AI evaluation - this may take 30-60 seconds...');
+    try {
+      await applicationApi.process(id);
+      toast.success('AI evaluation complete!');
+      loadData();
+    } catch (err) {
+      toast.error('AI evaluation failed: ' + (err.response?.data?.error || err.message));
+    }
+    setActioning(false);
+  };
+
   const getConfidenceColor = (confidence) => {
     if (confidence >= 85) return 'bg-green-100 text-green-700 border-green-300';
     if (confidence >= 60) return 'bg-yellow-100 text-yellow-700 border-yellow-300';
@@ -225,10 +238,25 @@ export const EvaluatorReviewPage = () => {
           {/* Right: Matches */}
           <div className="lg:col-span-2 space-y-4">
             <Card className="p-5 border-gray-200">
-              <h3 className="font-serif font-semibold text-lg mb-4 flex items-center gap-2">
-                <BookOpen className="w-5 h-5 text-maroon" />
-                Subject Matches ({matches.length})
-              </h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-serif font-semibold text-lg flex items-center gap-2">
+                  <BookOpen className="w-5 h-5 text-maroon" />
+                  Subject Matches ({matches.length})
+                </h3>
+                {!isFinalized && (
+                  <Button 
+                    onClick={handleRunAI}
+                    disabled={actioning}
+                    size="sm"
+                    variant="outline"
+                    className="border-maroon text-maroon hover:bg-maroon hover:text-white"
+                    data-testid="run-ai-eval-btn-top"
+                  >
+                    {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                    {matches.length === 0 ? 'Run AI Evaluation' : 'Re-run AI Evaluation'}
+                  </Button>
+                )}
+              </div>
               
               <Tabs defaultValue="all">
                 <TabsList className="mb-4">
@@ -252,7 +280,7 @@ export const EvaluatorReviewPage = () => {
             {/* Action Panel */}
             {!isFinalized && (
               <Card className="p-5 border-gray-200">
-                <h3 className="font-serif font-semibold mb-3">Evaluator Decision</h3>
+                <h3 className="font-serif font-semibold mb-3">Department Chair Decision</h3>
                 <Textarea
                   placeholder="Add notes for the applicant..."
                   value={evaluatorNote}
@@ -269,7 +297,7 @@ export const EvaluatorReviewPage = () => {
                     data-testid="finalize-btn"
                   >
                     {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-                    Finalize Application
+                    Finalize Accreditation
                   </Button>
                   <Button 
                     onClick={handleReject}
@@ -287,7 +315,7 @@ export const EvaluatorReviewPage = () => {
 
             {isFinalized && application?.evaluator_note && (
               <Card className="p-5 border-gray-200 bg-gray-50">
-                <h3 className="font-serif font-semibold mb-2">Evaluator Note</h3>
+                <h3 className="font-serif font-semibold mb-2">Department Chair Note</h3>
                 <p className="text-sm text-gray-700">{application.evaluator_note}</p>
               </Card>
             )}
