@@ -4,10 +4,11 @@ import { Button } from './ui/button';
 import { documentApi } from '../lib/api';
 import { Loader2, Download, ExternalLink, FileText, AlertCircle } from 'lucide-react';
 
-export const DocumentPreviewModal = ({ document: doc, open, onClose }) => {
+export const DocumentPreviewModal = ({ document: doc, open, onClose, focusSubject = null }) => {
   const [blobUrl, setBlobUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [focusedEvidence, setFocusedEvidence] = useState(null);
 
   const inferMimeType = () => {
     const mimeType = doc?.mime_type?.trim();
@@ -30,6 +31,41 @@ export const DocumentPreviewModal = ({ document: doc, open, onClose }) => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, doc?.id]);
+
+  useEffect(() => {
+    if (!doc || doc.document_type !== 'tor' || !focusSubject) {
+      setFocusedEvidence(null);
+      return;
+    }
+
+    const normalize = (value) => (value || '').toString().toUpperCase().replace(/\s|-/g, '');
+    const targetCode = normalize(focusSubject.code);
+    const targetTitle = (focusSubject.title || '').toLowerCase().trim();
+
+    try {
+      const parsed = JSON.parse(doc.extracted_text || '[]');
+      if (!Array.isArray(parsed)) {
+        setFocusedEvidence(null);
+        return;
+      }
+
+      let best = null;
+      for (const row of parsed) {
+        const rowCode = normalize(row?.code);
+        const rowTitle = (row?.title || '').toLowerCase().trim();
+        const codeMatch = !!targetCode && rowCode === targetCode;
+        const titleMatch = !!targetTitle && !!rowTitle && (rowTitle.includes(targetTitle) || targetTitle.includes(rowTitle));
+        if (codeMatch || titleMatch) {
+          best = row;
+          if (codeMatch) break;
+        }
+      }
+
+      setFocusedEvidence(best);
+    } catch {
+      setFocusedEvidence(null);
+    }
+  }, [doc, focusSubject]);
 
   const loadDocument = async () => {
     setLoading(true);
@@ -66,6 +102,11 @@ export const DocumentPreviewModal = ({ document: doc, open, onClose }) => {
   const mimeType = inferMimeType();
   const isImage = mimeType.startsWith('image/');
   const isPdf = mimeType === 'application/pdf';
+  const hasFocus = !!focusSubject && doc.document_type === 'tor';
+  const searchTerm = focusSubject?.code || focusSubject?.title || '';
+  const pdfSrc = isPdf && blobUrl && searchTerm
+    ? `${blobUrl}#search=${encodeURIComponent(searchTerm)}`
+    : blobUrl;
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -98,7 +139,7 @@ export const DocumentPreviewModal = ({ document: doc, open, onClose }) => {
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex-1 overflow-auto bg-gray-50 rounded-lg min-h-[60vh] flex items-center justify-center">
+        <div className="relative flex-1 overflow-auto bg-gray-50 rounded-lg min-h-[60vh] flex items-center justify-center">
           {loading && (
             <div className="text-center">
               <Loader2 className="w-8 h-8 animate-spin text-maroon mx-auto mb-2" />
@@ -116,19 +157,41 @@ export const DocumentPreviewModal = ({ document: doc, open, onClose }) => {
 
           {!loading && !error && blobUrl && (
             <>
+              {hasFocus && (
+                <div className="absolute top-0 left-0 right-0 z-10 p-3">
+                  <div className="rounded-md border border-maroon/30 bg-white/95 p-3 shadow-sm">
+                    <div className="text-xs font-semibold text-maroon mb-1">Focused TOR Subject</div>
+                    <div className="text-xs text-gray-700">
+                      {focusSubject.code ? `${focusSubject.code} - ` : ''}
+                      {focusSubject.title || 'Subject'}
+                      {focusSubject.grade ? ` (Grade: ${focusSubject.grade})` : ''}
+                    </div>
+                    {focusedEvidence ? (
+                      <div className="mt-2 text-[11px] text-gray-700 bg-maroon/5 border border-maroon/20 rounded p-2">
+                        Extracted row: {focusedEvidence.code || 'N/A'} - {focusedEvidence.title || 'N/A'} | Grade: {focusedEvidence.grade || 'N/A'} | Units: {focusedEvidence.units ?? 'N/A'}
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                        Exact OCR row was not found, but preview is focused using subject search.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {isImage && (
                 <img 
                   src={blobUrl} 
                   alt={doc.file_name} 
-                  className="max-w-full max-h-[70vh] object-contain"
+                  className={`max-w-full max-h-[70vh] object-contain ${hasFocus ? 'mt-20' : ''}`}
                   data-testid="preview-image"
                 />
               )}
               {isPdf && (
                 <iframe 
-                  src={blobUrl} 
+                  src={pdfSrc} 
                   title={doc.file_name}
-                  className="w-full h-[70vh] border-0"
+                  className={`w-full h-[70vh] border-0 ${hasFocus ? 'mt-20' : ''}`}
                   data-testid="preview-pdf"
                 />
               )}

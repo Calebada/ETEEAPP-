@@ -30,7 +30,13 @@ export const EvaluatorReviewPage = () => {
   const [evaluatorNote, setEvaluatorNote] = useState('');
   const [actioning, setActioning] = useState(false);
   const [previewDoc, setPreviewDoc] = useState(null);
+  const [previewFocus, setPreviewFocus] = useState(null);
   const [torEvidenceMatch, setTorEvidenceMatch] = useState(null);
+
+  const openDocumentPreview = (doc, focus = null) => {
+    setPreviewDoc(doc);
+    setPreviewFocus(focus);
+  };
 
   useEffect(() => {
     loadData();
@@ -260,7 +266,7 @@ export const EvaluatorReviewPage = () => {
                   application.documents.map((doc) => (
                     <button 
                       key={doc.id} 
-                      onClick={() => setPreviewDoc(doc)}
+                      onClick={() => openDocumentPreview(doc)}
                       className="w-full text-left text-xs bg-gray-50 hover:bg-maroon/5 hover:border-maroon/30 border border-transparent rounded p-2 smooth-transition group" 
                       data-testid={`doc-preview-${doc.id}`}
                     >
@@ -442,7 +448,11 @@ export const EvaluatorReviewPage = () => {
       <DocumentPreviewModal 
         document={previewDoc} 
         open={!!previewDoc} 
-        onClose={() => setPreviewDoc(null)} 
+        focusSubject={previewFocus}
+        onClose={() => {
+          setPreviewDoc(null);
+          setPreviewFocus(null);
+        }} 
       />
 
       <Dialog open={!!torEvidenceMatch} onOpenChange={(open) => !open && setTorEvidenceMatch(null)}>
@@ -479,7 +489,15 @@ export const EvaluatorReviewPage = () => {
                               OCR: {item.doc.ocr_status || 'unknown'}
                             </div>
                           </div>
-                          <Button size="sm" variant="outline" onClick={() => setPreviewDoc(item.doc)}>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openDocumentPreview(item.doc, {
+                              code: torEvidenceMatch.match?.tor_subject?.code || '',
+                              title: torEvidenceMatch.match?.tor_subject?.title || '',
+                              grade: torEvidenceMatch.match?.tor_subject?.grade || '',
+                            })}
+                          >
                             <Eye className="w-3 h-3 mr-1" />
                             Preview
                           </Button>
@@ -545,7 +563,7 @@ export const EvaluatorReviewPage = () => {
                       <button
                         key={doc.id}
                         onClick={() => {
-                          setPreviewDoc(doc);
+                          openDocumentPreview(doc);
                           // keep summary open while previewing
                         }}
                         className="w-full text-left rounded-md border border-gray-200 px-3 py-2 hover:border-maroon/40 hover:bg-maroon/5 transition-colors"
