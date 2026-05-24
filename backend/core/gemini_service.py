@@ -203,11 +203,21 @@ def _parse_tor_subjects_from_text(text):
     def _looks_like_units(token):
         return bool(re.fullmatch(r'\d+(?:\.\d+)?', token))
 
-    def _is_integer_like(token):
-        return bool(re.fullmatch(r'\d+', token))
+    def _is_code_line(line):
+        return bool(re.fullmatch(r'[A-Z]{2,5}\s?-?\s?\d{2,4}[A-Z]?', line.strip(), re.IGNORECASE))
 
-    def _is_decimal_like(token):
-        return bool(re.fullmatch(r'\d+\.\d+', token))
+    def _is_heading(line):
+        normalized = re.sub(r'\s+', '', line).lower()
+        return (
+            'semester' in normalized
+            or normalized in {'coursecode', 'coursecodeandnumber', 'coursetitle', 'grade', 'credits', 'andnumber', 'final', 'completion'}
+            or normalized.startswith('admissiondata')
+            or normalized.startswith('remarks')
+            or normalized.startswith('dateissued')
+            or normalized.startswith('issuedby')
+            or normalized.startswith('grading')
+            or normalized.startswith('note')
+        )
 
     def _add_subject(code, title, units, grade=''):
         code = re.sub(r'\s+', '', (code or '').upper())
@@ -226,71 +236,82 @@ def _parse_tor_subjects_from_text(text):
             'units': units_val,
         })
 
-    for raw_line in (text or '').splitlines():
-        line = re.sub(r'\s+', ' ', raw_line).strip()
+    normalized_lines = [re.sub(r'\s+', ' ', raw_line).strip() for raw_line in (text or '').splitlines()]
+    normalized_lines = [line for line in normalized_lines if line]
+
+    def _parse_compact_subject(line):
+        for pattern in (LOCAL_SUBJECT_PATTERN, LOCAL_SUBJECT_PATTERN_ALT):
+            match = pattern.search(line)
+            if match:
+                return {
+                    'code': match.group('code'),
+                    'title': match.group('title'),
+                    'units': match.group('units'),
+                    'grade': match.groupdict().get('grade', ''),
+                }
+        return None
+
+    i = 0
+    while i < len(normalized_lines):
+        line = normalized_lines[i]
         if not line:
+            i += 1
             continue
 
-        # Heuristic first: split code from the rest of the line, then infer title/units/grade from the tail.
-        generic = re.search(
-            r'(?P<code>[A-Z]{2,5}\s?-?\s?\d{2,4}[A-Z]?)\s+(?P<body>.+)$',
-            line,
-            re.IGNORECASE,
-        )
-        if generic:
-            code = generic.group('code')
-            tokens = re.sub(r'\s+', ' ', generic.group('body')).strip().split(' ')
-            if tokens:
-                grade = ''
-                units = '0'
-                title_tokens = tokens[:]
+        compact = _parse_compact_subject(line)
+        if compact:
+            _add_subject(compact['code'], compact['title'], compact['units'], compact['grade'])
+            i += 1
+            continue
 
-                if len(tokens) >= 2:
-                    last = tokens[-1]
-                    prev = tokens[-2]
-                    if (_is_decimal_like(prev) and _is_integer_like(last)):
-                        grade = prev
-                        units = last
-                        title_tokens = tokens[:-2]
-                    elif (_is_integer_like(prev) and _is_decimal_like(last)):
-                        grade = last
-                        units = prev
-                        title_tokens = tokens[:-2]
-                    elif _looks_like_grade(last) and _looks_like_units(prev):
-                        grade = last
-                        units = prev
-                        title_tokens = tokens[:-2]
-                    elif _looks_like_units(last) and _looks_like_grade(prev):
-                        units = last
-                        grade = prev
-                        title_tokens = tokens[:-2]
-                    elif _looks_like_units(last) and _looks_like_units(prev):
-                        if '.' in prev and '.' not in last:
-                            grade = prev
-                            units = last
-                            title_tokens = tokens[:-2]
-                        elif '.' in last and '.' not in prev:
-                            grade = last
-                            units = prev
-                            title_tokens = tokens[:-2]
-                        else:
-                            units = last
-                            title_tokens = tokens[:-1]
-                elif len(tokens) == 1:
-                    title_tokens = tokens
+        if _is_code_line(line):
+            code = line
+            title_parts = []
+            grade = ''
+            units = '0'
+            j = i + 1
 
-                title = ' '.join(title_tokens).strip()
-                _add_subject(code, title, units, grade)
-                continue
+            while j < len(normalized_lines):
+                candidate = normalized_lines[j]
 
-        # Regex fallback only if heuristic parsing fails to recognize the line.
-        match = LOCAL_SUBJECT_PATTERN.search(line) or LOCAL_SUBJECT_PATTERN_ALT.search(line)
-        if match:
-            code = match.group('code')
-            title = match.group('title')
-            units = match.group('units')
-            grade = match.groupdict().get('grade', '')
-            _add_subject(code, title, units, grade)
+                if _is_code_line(candidate):
+                    # If we already have title text, the next code marks the end of this subject.
+                    if title_parts:
+                        break
+                    j += 1
+                    continue
+
+                if _is_heading(candidate):
+                    j += 1
+                    continue
+
+                if _looks_like_grade(candidate) and title_parts and not grade:
+                    grade = candidate
+                    k = j + 1
+                    while k < len(normalized_lines):
+                        units_candidate = normalized_lines[k]
+                        if _is_heading(units_candidate):
+                            k += 1
+                            continue
+                        if _is_code_line(units_candidate):
+                            break
+                        if _looks_like_units(units_candidate):
+                            units = units_candidate
+                            j = k
+                            break
+                        k += 1
+                    _add_subject(code, ' '.join(title_parts), units, grade)
+                    break
+
+                if not grade:
+                    title_parts.append(candidate)
+
+                j += 1
+
+            i = max(i + 1, j + 1)
+            continue
+
+        i += 1
 
     return subjects
 

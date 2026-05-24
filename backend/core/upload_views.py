@@ -279,6 +279,34 @@ def process_job_description_ocr_sync(doc_id, image_base64):
             pass
 
 
+def ensure_tor_subjects_from_documents(application):
+    """Rebuild TORSubject rows from uploaded TOR documents when none exist yet.
+
+    This is a recovery path for older uploads where OCR completed but no
+    transcript subjects were extracted, so re-running AI evaluation can still
+    populate the BSIT curriculum match list.
+    """
+    if TORSubject.objects.filter(application=application).exists():
+        return
+
+    tor_documents = ApplicantDocument.objects.filter(application=application, document_type='tor')
+    for document in tor_documents:
+        try:
+            if not default_storage.exists(document.file_path):
+                continue
+
+            with default_storage.open(document.file_path, 'rb') as file_obj:
+                file_bytes = file_obj.read()
+
+            if not file_bytes:
+                continue
+
+            file_base64 = base64.b64encode(file_bytes).decode('utf-8')
+            process_tor_ocr_sync(document.id, file_base64)
+        except Exception as e:
+            print(f"TOR recovery reprocess error for {document.id}: {e}")
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def add_work_experience(request):
@@ -350,6 +378,10 @@ def run_full_evaluation_sync(application_id):
 
     reviewed_statuses = ['approved', 'rejected', 'overridden']
     pending_statuses = ['pending']
+
+    # Recovery path: older TOR uploads may have completed OCR but never created
+    # TORSubject rows, which leaves evaluation with nothing to match.
+    ensure_tor_subjects_from_documents(application)
     
     work_experiences_list = _get_work_experience_evidence(application)
     work_exp_objects = list(WorkExperience.objects.filter(application=application))
