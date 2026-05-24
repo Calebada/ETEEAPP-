@@ -48,6 +48,14 @@ LOCAL_SUBJECT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+LOCAL_SUBJECT_PATTERN_ALT = re.compile(
+    r'(?P<code>[A-Z]{2,5}\s?-?\s?\d{2,4}[A-Z]?)\s+'
+    r'(?P<title>.+?)\s+'
+    r'(?P<grade>(?:\d+(?:\.\d+)?)|A\+?|B\+?|C\+?|D\+?|F|P|PASSED|FAILED|INC|INCOMPLETE|DRP)\s+'
+    r'(?P<units>\d+(?:\.\d+)?)\b',
+    re.IGNORECASE,
+)
+
 LOCAL_JOB_TITLE_HINTS = [
     'web designer', 'ui designer', 'ux designer', 'ui/ux designer',
     'frontend developer', 'back-end developer', 'backend developer',
@@ -189,35 +197,100 @@ def _parse_tor_subjects_from_text(text):
     subjects = []
     seen_codes = set()
 
+    def _looks_like_grade(token):
+        return bool(re.fullmatch(r'(?:\d+(?:\.\d+)?)|A\+?|B\+?|C\+?|D\+?|F|P|PASSED|FAILED|INC|INCOMPLETE|DRP', token, re.IGNORECASE))
+
+    def _looks_like_units(token):
+        return bool(re.fullmatch(r'\d+(?:\.\d+)?', token))
+
+    def _is_integer_like(token):
+        return bool(re.fullmatch(r'\d+', token))
+
+    def _is_decimal_like(token):
+        return bool(re.fullmatch(r'\d+\.\d+', token))
+
+    def _add_subject(code, title, units, grade=''):
+        code = re.sub(r'\s+', '', (code or '').upper())
+        title = re.sub(r'\s+', ' ', (title or '')).strip(' -:;|')
+        if not code or code in seen_codes or not title:
+            return
+        try:
+            units_val = int(float(units))
+        except (TypeError, ValueError):
+            units_val = 0
+        seen_codes.add(code)
+        subjects.append({
+            'code': code,
+            'title': title,
+            'grade': (grade or '').strip(),
+            'units': units_val,
+        })
+
     for raw_line in (text or '').splitlines():
         line = re.sub(r'\s+', ' ', raw_line).strip()
         if not line:
             continue
 
-        match = LOCAL_SUBJECT_PATTERN.search(line)
-        if not match:
-            continue
+        # Heuristic first: split code from the rest of the line, then infer title/units/grade from the tail.
+        generic = re.search(
+            r'(?P<code>[A-Z]{2,5}\s?-?\s?\d{2,4}[A-Z]?)\s+(?P<body>.+)$',
+            line,
+            re.IGNORECASE,
+        )
+        if generic:
+            code = generic.group('code')
+            tokens = re.sub(r'\s+', ' ', generic.group('body')).strip().split(' ')
+            if tokens:
+                grade = ''
+                units = '0'
+                title_tokens = tokens[:]
 
-        code = re.sub(r'\s+', '', match.group('code').upper())
-        if code in seen_codes:
-            continue
+                if len(tokens) >= 2:
+                    last = tokens[-1]
+                    prev = tokens[-2]
+                    if (_is_decimal_like(prev) and _is_integer_like(last)):
+                        grade = prev
+                        units = last
+                        title_tokens = tokens[:-2]
+                    elif (_is_integer_like(prev) and _is_decimal_like(last)):
+                        grade = last
+                        units = prev
+                        title_tokens = tokens[:-2]
+                    elif _looks_like_grade(last) and _looks_like_units(prev):
+                        grade = last
+                        units = prev
+                        title_tokens = tokens[:-2]
+                    elif _looks_like_units(last) and _looks_like_grade(prev):
+                        units = last
+                        grade = prev
+                        title_tokens = tokens[:-2]
+                    elif _looks_like_units(last) and _looks_like_units(prev):
+                        if '.' in prev and '.' not in last:
+                            grade = prev
+                            units = last
+                            title_tokens = tokens[:-2]
+                        elif '.' in last and '.' not in prev:
+                            grade = last
+                            units = prev
+                            title_tokens = tokens[:-2]
+                        else:
+                            units = last
+                            title_tokens = tokens[:-1]
+                elif len(tokens) == 1:
+                    title_tokens = tokens
 
-        title = match.group('title').strip(' -:;|')
-        try:
-            units = int(float(match.group('units')))
-        except (TypeError, ValueError):
-            units = 0
+                title = ' '.join(title_tokens).strip()
+                _add_subject(code, title, units, grade)
+                continue
 
-        grade = match.group('grade').strip()
-
-        if code and title:
-            seen_codes.add(code)
-            subjects.append({
-                'code': code,
-                'title': title,
-                'grade': grade,
-                'units': units,
-            })
+        # Regex fallback only if heuristic parsing fails to recognize the line.
+        match = LOCAL_SUBJECT_PATTERN.search(line) or LOCAL_SUBJECT_PATTERN_ALT.search(line)
+        if match:
+            code = match.group('code')
+            title = match.group('title')
+            units = match.group('units')
+            grade = match.groupdict().get('grade', '')
+            _add_subject(code, title, units, grade)
 
     return subjects
 
