@@ -347,9 +347,9 @@ def process_application(request):
 def run_full_evaluation_sync(application_id):
     """Run full AI evaluation - SYNC version with sync ORM and async_to_sync for Gemini calls"""
     application = Application.objects.get(id=application_id)
-    
-    # Clear existing matches
-    SubjectMatch.objects.filter(application=application).delete()
+
+    reviewed_statuses = ['approved', 'rejected', 'overridden']
+    pending_statuses = ['pending']
     
     work_experiences_list = _get_work_experience_evidence(application)
     work_exp_objects = list(WorkExperience.objects.filter(application=application))
@@ -374,6 +374,20 @@ def run_full_evaluation_sync(application_id):
         c['id'] = str(c['id'])
     
     for tor_subject in tor_subjects:
+        reviewed_match = SubjectMatch.objects.filter(
+            application=application,
+            tor_subject=tor_subject,
+            status__in=reviewed_statuses,
+        ).first()
+        if reviewed_match:
+            continue
+
+        SubjectMatch.objects.filter(
+            application=application,
+            tor_subject=tor_subject,
+            status__in=pending_statuses,
+        ).delete()
+
         tor_data = {
             'code': tor_subject.code,
             'title': tor_subject.title,
@@ -415,6 +429,20 @@ def run_full_evaluation_sync(application_id):
     # Step 3: Match work experience to curriculum
     for work_exp in work_exp_objects:
         try:
+            reviewed_work_match = SubjectMatch.objects.filter(
+                application=application,
+                work_experience=work_exp,
+                status__in=reviewed_statuses,
+            ).first()
+            if reviewed_work_match:
+                continue
+
+            SubjectMatch.objects.filter(
+                application=application,
+                work_experience=work_exp,
+                status__in=pending_statuses,
+            ).delete()
+
             exp_data = {
                 'job_title': work_exp.job_title,
                 'years': work_exp.years,
@@ -433,9 +461,11 @@ def run_full_evaluation_sync(application_id):
                     existing = SubjectMatch.objects.filter(
                         application=application,
                         curriculum_subject=curriculum_subj,
-                        source='tor'
                     ).first()
                     
+                    if existing and existing.status in reviewed_statuses:
+                        continue
+
                     if not existing:
                         SubjectMatch.objects.create(
                             application=application,
@@ -453,8 +483,14 @@ def run_full_evaluation_sync(application_id):
     try:
         approved_matches = SubjectMatch.objects.filter(
             application=application,
-            confidence__gte=60
+            status__in=['approved', 'overridden']
         ).values_list('curriculum_subject_id', flat=True)
+
+        if not approved_matches.exists():
+            approved_matches = SubjectMatch.objects.filter(
+                application=application,
+                confidence__gte=60
+            ).values_list('curriculum_subject_id', flat=True)
         
         credited_subject_ids = set(approved_matches)
         all_subjects = CurriculumSubject.objects.filter(program=application.program)
