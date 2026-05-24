@@ -8,6 +8,7 @@ import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Textarea } from '../components/ui/textarea';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { applicationApi, subjectMatchApi, predictionApi, programApi } from '../lib/api';
 import {
   ArrowLeft, Loader2, FileText, Briefcase, CheckCircle2, XCircle,
@@ -23,10 +24,13 @@ export const EvaluatorReviewPage = () => {
   const [prediction, setPrediction] = useState(null);
   const [curriculum, setCurriculum] = useState([]);
   const [appSummary, setAppSummary] = useState(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [evaluatorNote, setEvaluatorNote] = useState('');
   const [actioning, setActioning] = useState(false);
   const [previewDoc, setPreviewDoc] = useState(null);
+  const [torEvidenceMatch, setTorEvidenceMatch] = useState(null);
 
   useEffect(() => {
     loadData();
@@ -136,6 +140,18 @@ export const EvaluatorReviewPage = () => {
     setActioning(false);
   };
 
+  const loadApplicantSummary = async () => {
+    setSummaryLoading(true);
+    try {
+      const resp = await applicationApi.summary(id);
+      setAppSummary(resp.data || null);
+      setSummaryOpen(true);
+    } catch (err) {
+      toast.error('Failed to load applicant summary');
+    }
+    setSummaryLoading(false);
+  };
+
   const getConfidenceColor = (confidence) => {
     if (confidence >= 85) return 'bg-green-100 text-green-700 border-green-300';
     if (confidence >= 60) return 'bg-yellow-100 text-yellow-700 border-yellow-300';
@@ -224,13 +240,10 @@ export const EvaluatorReviewPage = () => {
                   </ul>
                 )}
                 <div className="mt-3">
-                  <Button size="sm" variant="outline" onClick={async () => {
-                    try {
-                      const resp = await applicationApi.summary(id);
-                      setAppSummary(resp.data);
-                      toast.success('Summary regenerated');
-                    } catch (err) { toast.error('Failed to regenerate summary'); }
-                  }}>Regenerate Summary</Button>
+                  <Button size="sm" variant="outline" onClick={loadApplicantSummary} disabled={summaryLoading}>
+                    {summaryLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                    Regenerate Summary
+                  </Button>
                 </div>
               </Card>
             )}
@@ -329,13 +342,40 @@ export const EvaluatorReviewPage = () => {
                 </TabsList>
                 
                 <TabsContent value="all">
-                  <MatchesList matches={matches} onApprove={handleApproveMatch} onReject={handleRejectMatch} getConfidenceColor={getConfidenceColor} disabled={isFinalized} curriculum={curriculum} />
+                  <MatchesList
+                    matches={matches}
+                    onApprove={handleApproveMatch}
+                    onReject={handleRejectMatch}
+                    getConfidenceColor={getConfidenceColor}
+                    disabled={isFinalized}
+                    curriculum={curriculum}
+                    documents={application?.documents || []}
+                    onOpenTorEvidence={setTorEvidenceMatch}
+                  />
                 </TabsContent>
                 <TabsContent value="tor">
-                  <MatchesList matches={torMatches} onApprove={handleApproveMatch} onReject={handleRejectMatch} getConfidenceColor={getConfidenceColor} disabled={isFinalized} curriculum={curriculum} />
+                  <MatchesList
+                    matches={torMatches}
+                    onApprove={handleApproveMatch}
+                    onReject={handleRejectMatch}
+                    getConfidenceColor={getConfidenceColor}
+                    disabled={isFinalized}
+                    curriculum={curriculum}
+                    documents={application?.documents || []}
+                    onOpenTorEvidence={setTorEvidenceMatch}
+                  />
                 </TabsContent>
                 <TabsContent value="work">
-                  <MatchesList matches={workMatches} onApprove={handleApproveMatch} onReject={handleRejectMatch} getConfidenceColor={getConfidenceColor} disabled={isFinalized} curriculum={curriculum} />
+                  <MatchesList
+                    matches={workMatches}
+                    onApprove={handleApproveMatch}
+                    onReject={handleRejectMatch}
+                    getConfidenceColor={getConfidenceColor}
+                    disabled={isFinalized}
+                    curriculum={curriculum}
+                    documents={application?.documents || []}
+                    onOpenTorEvidence={setTorEvidenceMatch}
+                  />
                 </TabsContent>
               </Tabs>
             </Card>
@@ -404,11 +444,186 @@ export const EvaluatorReviewPage = () => {
         open={!!previewDoc} 
         onClose={() => setPreviewDoc(null)} 
       />
+
+      <Dialog open={!!torEvidenceMatch} onOpenChange={(open) => !open && setTorEvidenceMatch(null)}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-auto" data-testid="tor-evidence-modal">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5 text-maroon" />
+              TOR Subject Evidence
+            </DialogTitle>
+          </DialogHeader>
+
+          {torEvidenceMatch?.match && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <div className="text-sm font-semibold text-gray-700 mb-2">Matched Subject</div>
+                <div className="text-sm text-gray-900">
+                  {torEvidenceMatch.match.tor_subject?.code} - {torEvidenceMatch.match.tor_subject?.title}
+                </div>
+                <div className="mt-2 text-xs text-gray-600">
+                  Applicant Grade: <span className="font-semibold text-gray-800">{torEvidenceMatch.match.tor_subject?.grade || 'N/A'}</span>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 p-4">
+                <div className="text-sm font-semibold text-gray-700 mb-2">TOR Document Proof</div>
+                <div className="space-y-3">
+                  {torEvidenceMatch.evidence && torEvidenceMatch.evidence.length > 0 ? (
+                    torEvidenceMatch.evidence.map((item) => (
+                      <div key={item.doc.id} className="rounded-md border border-gray-200 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-gray-800 truncate">{item.doc.file_name}</div>
+                            <div className="text-xs text-gray-500 mt-1">
+                              OCR: {item.doc.ocr_status || 'unknown'}
+                            </div>
+                          </div>
+                          <Button size="sm" variant="outline" onClick={() => setPreviewDoc(item.doc)}>
+                            <Eye className="w-3 h-3 mr-1" />
+                            Preview
+                          </Button>
+                        </div>
+
+                        {item.subjectEvidence && (
+                          <div className="mt-3 text-xs bg-maroon/5 border border-maroon/20 rounded p-2">
+                            <div className="font-semibold text-maroon mb-1">Extracted Subject Row</div>
+                            <div>Code: {item.subjectEvidence.code || 'N/A'}</div>
+                            <div>Title: {item.subjectEvidence.title || 'N/A'}</div>
+                            <div>Grade: {item.subjectEvidence.grade || 'N/A'}</div>
+                            <div>Units: {item.subjectEvidence.units ?? 'N/A'}</div>
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-sm text-gray-500">No parsed TOR evidence found for this subject yet.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={summaryOpen} onOpenChange={setSummaryOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-auto" data-testid="applicant-summary-modal">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Briefcase className="w-5 h-5 text-maroon" />
+              Applicant Summary
+            </DialogTitle>
+          </DialogHeader>
+
+          {appSummary ? (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <div className="text-sm font-semibold text-gray-700 mb-2">Summary</div>
+                <p className="text-sm text-gray-800 leading-6">{appSummary.summary}</p>
+              </div>
+
+              {appSummary.highlights && appSummary.highlights.length > 0 && (
+                <div className="rounded-lg border border-gray-200 p-4">
+                  <div className="text-sm font-semibold text-gray-700 mb-2">Highlights</div>
+                  <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
+                    {appSummary.highlights.map((item, index) => (
+                      <li key={index}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {typeof appSummary.confidence === 'number' && (
+                <div className="text-xs text-gray-500">Confidence: {appSummary.confidence}%</div>
+              )}
+
+              <div className="rounded-lg border border-gray-200 p-4">
+                <div className="text-sm font-semibold text-gray-700 mb-2">Document Evidence</div>
+                <div className="space-y-2">
+                  {application?.documents?.length > 0 ? (
+                    application.documents.map((doc) => (
+                      <button
+                        key={doc.id}
+                        onClick={() => {
+                          setPreviewDoc(doc);
+                          // keep summary open while previewing
+                        }}
+                        className="w-full text-left rounded-md border border-gray-200 px-3 py-2 hover:border-maroon/40 hover:bg-maroon/5 transition-colors"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-gray-800 truncate">
+                              {doc.file_name}
+                            </div>
+                            <div className="text-xs text-gray-500 capitalize">
+                              {doc.document_type?.replace('_', ' ')}
+                            </div>
+                          </div>
+                          <span className="text-xs text-maroon font-medium">Preview</span>
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="text-sm text-gray-500">No uploaded documents available.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-gray-600">No summary available.</div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
 
-const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disabled, curriculum }) => {
+const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disabled, curriculum, documents, onOpenTorEvidence }) => {
+  const normalize = (val) => (val || '').toString().toUpperCase().replace(/\s|-/g, '');
+
+  const parseExtractedSubjects = (doc) => {
+    if (!doc?.extracted_text) return [];
+    try {
+      const parsed = JSON.parse(doc.extracted_text);
+      if (Array.isArray(parsed)) return parsed;
+      return [];
+    } catch {
+      return [];
+    }
+  };
+
+  const buildTorEvidence = (match, documents) => {
+    const torDocs = (documents || []).filter((d) => d.document_type === 'tor');
+    const targetCode = normalize(match?.tor_subject?.code);
+    const targetTitle = (match?.tor_subject?.title || '').toLowerCase().trim();
+    const evidence = [];
+
+    for (const doc of torDocs) {
+      const rows = parseExtractedSubjects(doc);
+      let subjectEvidence = null;
+
+      for (const row of rows) {
+        const codeMatch = targetCode && normalize(row?.code) === targetCode;
+        const rowTitle = (row?.title || '').toLowerCase().trim();
+        const titleMatch = !!targetTitle && !!rowTitle && (rowTitle.includes(targetTitle) || targetTitle.includes(rowTitle));
+        if (codeMatch || titleMatch) {
+          subjectEvidence = row;
+          break;
+        }
+      }
+
+      if (subjectEvidence) {
+        evidence.push({ doc, subjectEvidence });
+      }
+    }
+
+    if (evidence.length === 0 && torDocs.length > 0) {
+      return torDocs.map((doc) => ({ doc, subjectEvidence: null }));
+    }
+
+    return evidence;
+  };
+
   if (matches.length === 0) {
     return <p className="text-sm text-gray-500 py-4">No matches in this category</p>;
   }
@@ -456,6 +671,26 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
               {match.tor_subject && (
                 <div className="text-xs text-gray-500 mt-1">
                   ← TOR: {match.tor_subject.code} - {match.tor_subject.title}
+                  {match.tor_subject.grade ? ` (Grade: ${match.tor_subject.grade})` : ''}
+                </div>
+              )}
+              {match.source === 'tor' && match.tor_subject && (
+                <div className="mt-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={() => {
+                      const evidence = buildTorEvidence(match, documents || []);
+                      if (onOpenTorEvidence) {
+                        onOpenTorEvidence({ match, evidence });
+                      }
+                    }}
+                    data-testid={`tor-evidence-${match.id}`}
+                  >
+                    <Eye className="w-3 h-3 mr-1" />
+                    Preview TOR Evidence
+                  </Button>
                 </div>
               )}
               {match.work_experience && (
