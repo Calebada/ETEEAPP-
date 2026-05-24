@@ -9,7 +9,7 @@ import { useAuth } from '../lib/auth-context';
 import { applicationApi, dashboardApi } from '../lib/api';
 import {
   FileText, Upload, Clock, CheckCircle2, AlertCircle, ArrowRight,
-  Sparkles, Briefcase, GraduationCap, Loader2, Plus, Award
+  Sparkles, Briefcase, GraduationCap, Loader2, Plus, Award, Trash2
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -19,6 +19,7 @@ export const ApplicantDashboard = () => {
   const [applications, setApplications] = useState([]);
   const [stats, setStats] = useState({});
   const [loading, setLoading] = useState(true);
+  const [deletingApplicationId, setDeletingApplicationId] = useState(null);
 
   useEffect(() => {
     loadData();
@@ -45,6 +46,23 @@ export const ApplicantDashboard = () => {
     } catch (err) {
       toast.error('Failed to start application');
     }
+  };
+
+  const handleDeleteApplication = async (event, applicationId) => {
+    event.stopPropagation();
+    if (!window.confirm('Delete this application? This cannot be undone.')) {
+      return;
+    }
+
+    setDeletingApplicationId(applicationId);
+    try {
+      await applicationApi.delete(applicationId);
+      setApplications((prev) => prev.filter((app) => app.id !== applicationId));
+      toast.success('Application removed');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete application');
+    }
+    setDeletingApplicationId(null);
   };
 
   const getStatusColor = (status) => {
@@ -82,40 +100,7 @@ export const ApplicantDashboard = () => {
           <p className="text-gray-600">Track your application and manage your credentials.</p>
         </div>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <Card className="p-6 border-gray-200" data-testid="stat-total-applications">
-            <div className="flex items-center justify-between mb-2">
-              <FileText className="w-8 h-8 text-maroon" />
-              <span className="text-3xl font-bold">{stats.total_applications || 0}</span>
-            </div>
-            <div className="text-sm text-gray-600">Total Applications</div>
-          </Card>
-          
-          <Card className="p-6 border-gray-200">
-            <div className="flex items-center justify-between mb-2">
-              <Clock className="w-8 h-8 text-yellow-600" />
-              <span className="text-3xl font-bold">{(stats.draft || 0) + (stats.submitted || 0)}</span>
-            </div>
-            <div className="text-sm text-gray-600">In Progress</div>
-          </Card>
-          
-          <Card className="p-6 border-gray-200">
-            <div className="flex items-center justify-between mb-2">
-              <Sparkles className="w-8 h-8 text-purple-600" />
-              <span className="text-3xl font-bold">{stats.under_review || 0}</span>
-            </div>
-            <div className="text-sm text-gray-600">Under Review</div>
-          </Card>
-          
-          <Card className="p-6 border-gray-200">
-            <div className="flex items-center justify-between mb-2">
-              <CheckCircle2 className="w-8 h-8 text-green-600" />
-              <span className="text-3xl font-bold">{stats.finalized || 0}</span>
-            </div>
-            <div className="text-sm text-gray-600">Completed</div>
-          </Card>
-        </div>
+        {/* Stats grid removed per request */}
 
         {/* Main Content Grid */}
         <div className="grid lg:grid-cols-3 gap-6">
@@ -156,7 +141,7 @@ export const ApplicantDashboard = () => {
                     onClick={() => navigate(app.status === 'draft' ? `/applicant/apply/${app.id}` : `/applicant/evaluation/${app.id}`)}
                     data-testid={`application-card-${app.id}`}
                   >
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-start justify-between gap-3">
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-2">
                           <Badge className={getStatusColor(app.status)} data-testid={`app-status-${app.id}`}>
@@ -179,7 +164,23 @@ export const ApplicantDashboard = () => {
                           </div>
                         )}
                       </div>
-                      <ArrowRight className="w-5 h-5 text-gray-400" />
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="h-8 px-3 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={(event) => handleDeleteApplication(event, app.id)}
+                          disabled={deletingApplicationId === app.id}
+                          data-testid={`delete-application-${app.id}`}
+                        >
+                          {deletingApplicationId === app.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <><Trash2 className="w-4 h-4 mr-1" /> Remove</>
+                          )}
+                        </Button>
+                        <ArrowRight className="w-5 h-5 text-gray-400" />
+                      </div>
                     </div>
                   </Card>
                 ))}

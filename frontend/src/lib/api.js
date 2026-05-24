@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-export const API = `${BACKEND_URL}/api`;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+export const API = `${BACKEND_URL.replace(/\/$/, '')}/api`;
 
 const apiClient = axios.create({
   baseURL: API,
@@ -43,19 +43,24 @@ export const authApi = {
 };
 
 export const applicationApi = {
-  list: () => apiClient.get('/applications/'),
+  list: (params = {}) => apiClient.get('/applications/', { params }),
   create: (data) => apiClient.post('/applications/', data),
   get: (id) => apiClient.get(`/applications/${id}/`),
   update: (id, data) => apiClient.patch(`/applications/${id}/`, data),
+  delete: (id) => apiClient.delete(`/applications/${id}/`),
   submit: (id) => apiClient.post(`/applications/${id}/submit/`),
+  reopen: (id) => apiClient.post(`/applications/${id}/reopen/`),
   finalize: (id, data) => apiClient.post(`/applications/${id}/finalize/`, data),
   reject: (id, data) => apiClient.post(`/applications/${id}/reject/`, data),
   process: (id) => apiClient.post('/application/process/', { application_id: id }),
+  summary: (id) => apiClient.get(`/applications/${id}/summary/`),
 };
 
 export const documentApi = {
   list: (applicationId) => apiClient.get(`/documents/?application_id=${applicationId}`),
   upload: (data) => apiClient.post('/upload/document/', data),
+  delete: (documentId) => apiClient.delete(`/documents/${documentId}/`),
+  reprocess: (documentId) => apiClient.post(`/documents/${documentId}/reprocess/`),
   previewUrl: (documentId) => `${API}/documents/${documentId}/preview/`,
   preview: (documentId) => apiClient.get(`/documents/${documentId}/preview/`, { responseType: 'blob' }),
 };
@@ -64,6 +69,7 @@ export const workExperienceApi = {
   list: (applicationId) => apiClient.get(`/work-experiences/?application_id=${applicationId}`),
   add: (data) => apiClient.post('/work-experience/add/', data),
   delete: (id) => apiClient.delete(`/work-experiences/${id}/`),
+  update: (id, data) => apiClient.patch(`/work-experiences/${id}/`, data),
 };
 
 export const subjectMatchApi = {
@@ -77,6 +83,11 @@ export const subjectMatchApi = {
 export const programApi = {
   list: () => apiClient.get('/programs/'),
   curriculum: (programId) => apiClient.get(`/curriculum-subjects/?program_id=${programId}`),
+};
+
+export const curriculumApi = {
+  parse: (data) => apiClient.post('/upload/curriculum/', { ...data, preview: true }),
+  upload: (data) => apiClient.post('/upload/curriculum/', data),
 };
 
 export const predictionApi = {

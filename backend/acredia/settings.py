@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 from datetime import timedelta
+from urllib.parse import urlparse
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
@@ -9,6 +10,8 @@ load_dotenv(BASE_DIR / '.env')
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-this')
 DEBUG = True
 ALLOWED_HOSTS = ['*']
+
+DATABASE_URL = os.getenv('DATABASE_URL', '')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -54,19 +57,28 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'acredia.wsgi.application'
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'postgres',
-        'USER': 'postgres.wzkqhjrcnbpgdwzjzezf',
-        'PASSWORD': os.getenv('DATABASE_URL', '').split(':')[2].split('@')[0],
-        'HOST': 'aws-1-ap-northeast-2.pooler.supabase.com',
-        'PORT': '6543',
-        'OPTIONS': {
-            'connect_timeout': 30,
-        },
+if DATABASE_URL:
+    parsed_database_url = urlparse(DATABASE_URL)
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': parsed_database_url.path.lstrip('/'),
+            'USER': parsed_database_url.username,
+            'PASSWORD': parsed_database_url.password,
+            'HOST': parsed_database_url.hostname,
+            'PORT': parsed_database_url.port,
+            'OPTIONS': {
+                'connect_timeout': 30,
+            },
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -106,6 +118,19 @@ SIMPLE_JWT = {
 }
 
 AUTH_USER_MODEL = 'core.User'
+
+_supabase_url_env = os.getenv('SUPABASE_URL', '').strip()
+if _supabase_url_env:
+    SUPABASE_URL = _supabase_url_env
+elif DATABASE_URL:
+    _parsed_supabase_db_url = urlparse(DATABASE_URL)
+    _supabase_username = _parsed_supabase_db_url.username or ''
+    _supabase_project_ref = _supabase_username.split('.', 1)[1] if '.' in _supabase_username else ''
+    SUPABASE_URL = f'https://{_supabase_project_ref}.supabase.co' if _supabase_project_ref else ''
+else:
+    SUPABASE_URL = ''
+
+SUPABASE_ANON_KEY = os.getenv('SUPABASE_ANON_KEY', '')
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')

@@ -146,8 +146,8 @@ export const EvaluationPage = () => {
             <div>
               <h1 className="font-serif text-3xl sm:text-4xl font-bold mb-2">Evaluation Results</h1>
               <p className="text-gray-600">
-                Application #{application?.id?.slice(0, 8)} · 
-                <Badge className="ml-2" variant="outline">
+                Application # · <span className="ml-2 text-sm text-gray-700">{application?.id}</span>
+                <Badge className="ml-4" variant="outline">
                   {application?.status?.replace('_', ' ').toUpperCase()}
                 </Badge>
               </p>
@@ -163,34 +163,7 @@ export const EvaluationPage = () => {
           </div>
         </div>
 
-        {/* Summary Cards */}
-        <div className="grid md:grid-cols-4 gap-4 mb-8">
-          <Card className="p-5 border-gray-200">
-            <BookOpen className="w-8 h-8 text-maroon mb-2" />
-            <div className="text-3xl font-bold">{matches.length}</div>
-            <div className="text-sm text-gray-600">Subjects Analyzed</div>
-          </Card>
-          
-          <Card className="p-5 border-gray-200">
-            <CheckCircle2 className="w-8 h-8 text-green-600 mb-2" />
-            <div className="text-3xl font-bold">{totalCredited}</div>
-            <div className="text-sm text-gray-600">Subjects Credited</div>
-          </Card>
-          
-          <Card className="p-5 border-gray-200">
-            <TrendingUp className="w-8 h-8 text-blue-600 mb-2" />
-            <div className="text-3xl font-bold">{totalCreditedUnits}</div>
-            <div className="text-sm text-gray-600">Units Credited</div>
-          </Card>
-          
-          <Card className="p-5 border-gray-200">
-            <Calendar className="w-8 h-8 text-gold mb-2" />
-            <div className="text-3xl font-bold">
-              {prediction ? `${prediction.semesters_min}-${prediction.semesters_max}` : '—'}
-            </div>
-            <div className="text-sm text-gray-600">Semesters Remaining</div>
-          </Card>
-        </div>
+        {/* Summary Cards removed as requested */}
 
         {/* AI Recommendation */}
         {application?.recommended_program && (

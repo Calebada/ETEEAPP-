@@ -9,6 +9,16 @@ export const DocumentPreviewModal = ({ document: doc, open, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  const inferMimeType = () => {
+    const mimeType = doc?.mime_type?.trim();
+    if (mimeType) return mimeType;
+
+    const source = `${doc?.file_name || ''} ${doc?.file_path || ''}`.toLowerCase();
+    if (source.endsWith('.pdf') || source.includes('.pdf')) return 'application/pdf';
+    if (source.match(/\.(png|jpe?g|gif|webp|bmp|svg)$/)) return 'image/*';
+    return 'application/octet-stream';
+  };
+
   useEffect(() => {
     if (open && doc) {
       loadDocument();
@@ -26,7 +36,7 @@ export const DocumentPreviewModal = ({ document: doc, open, onClose }) => {
     setError(null);
     try {
       const response = await documentApi.preview(doc.id);
-      const blob = new Blob([response.data], { type: doc.mime_type || 'application/octet-stream' });
+      const blob = new Blob([response.data], { type: inferMimeType() });
       const url = URL.createObjectURL(blob);
       setBlobUrl(url);
     } catch (err) {
@@ -53,8 +63,9 @@ export const DocumentPreviewModal = ({ document: doc, open, onClose }) => {
 
   if (!doc) return null;
 
-  const isImage = doc.mime_type?.startsWith('image/');
-  const isPdf = doc.mime_type === 'application/pdf';
+  const mimeType = inferMimeType();
+  const isImage = mimeType.startsWith('image/');
+  const isPdf = mimeType === 'application/pdf';
 
   return (
     <Dialog open={open} onOpenChange={onClose}>

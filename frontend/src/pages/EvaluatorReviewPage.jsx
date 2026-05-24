@@ -8,7 +8,7 @@ import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Textarea } from '../components/ui/textarea';
-import { applicationApi, subjectMatchApi, predictionApi } from '../lib/api';
+import { applicationApi, subjectMatchApi, predictionApi, programApi } from '../lib/api';
 import {
   ArrowLeft, Loader2, FileText, Briefcase, CheckCircle2, XCircle,
   AlertCircle, BookOpen, User, Calendar, MapPin, Phone, Sparkles, Flag, Eye
@@ -21,6 +21,8 @@ export const EvaluatorReviewPage = () => {
   const [application, setApplication] = useState(null);
   const [matches, setMatches] = useState([]);
   const [prediction, setPrediction] = useState(null);
+  const [curriculum, setCurriculum] = useState([]);
+  const [appSummary, setAppSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [evaluatorNote, setEvaluatorNote] = useState('');
   const [actioning, setActioning] = useState(false);
@@ -41,6 +43,20 @@ export const EvaluatorReviewPage = () => {
       setMatches(matchesResp.data);
       setPrediction(predResp.data);
       setEvaluatorNote(appResp.data.evaluator_note || '');
+      // load curriculum for the application's program so evaluator can assign subjects
+      try {
+        if (appResp.data && appResp.data.program && appResp.data.program.id) {
+          const curResp = await programApi.curriculum(appResp.data.program.id);
+          setCurriculum(curResp.data || []);
+        }
+        // load generated applicant summary (if available)
+        try {
+          const sumResp = await applicationApi.summary(id);
+          setAppSummary(sumResp.data || null);
+        } catch (e) {
+          setAppSummary(null);
+        }
+      } catch (e) { setCurriculum([]); }
     } catch (err) {
       toast.error('Failed to load application');
     }
@@ -91,6 +107,18 @@ export const EvaluatorReviewPage = () => {
       navigate('/evaluator');
     } catch (err) {
       toast.error('Failed');
+    }
+    setActioning(false);
+  };
+
+  const handleReopen = async () => {
+    setActioning(true);
+    try {
+      await applicationApi.reopen(id);
+      toast.success('Application moved to Under Review');
+      loadData();
+    } catch (err) {
+      toast.error('Failed to reopen application');
     }
     setActioning(false);
   };
@@ -183,16 +211,31 @@ export const EvaluatorReviewPage = () => {
               </div>
             </Card>
 
-            {application?.recommended_program && (
-              <Card className="p-5 bg-maroon/5 border-maroon/20">
-                <h3 className="font-serif font-semibold mb-2 flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-maroon" />
-                  AI Recommendation
+            {appSummary && (
+              <Card className="p-5 border-gray-200">
+                <h3 className="font-serif font-semibold mb-3 flex items-center gap-2">
+                  <Briefcase className="w-4 h-4 text-maroon" />
+                  Applicant Summary
                 </h3>
-                <Badge className="bg-maroon text-white mb-2">{application.recommended_program}</Badge>
-                <p className="text-xs text-gray-700">{application.recommendation_reasoning}</p>
+                <div className="text-sm text-gray-700 mb-2">{appSummary.summary}</div>
+                {appSummary.highlights && appSummary.highlights.length > 0 && (
+                  <ul className="text-xs list-disc list-inside text-gray-600">
+                    {appSummary.highlights.map((h, i) => <li key={i}>{h}</li>)}
+                  </ul>
+                )}
+                <div className="mt-3">
+                  <Button size="sm" variant="outline" onClick={async () => {
+                    try {
+                      const resp = await applicationApi.summary(id);
+                      setAppSummary(resp.data);
+                      toast.success('Summary regenerated');
+                    } catch (err) { toast.error('Failed to regenerate summary'); }
+                  }}>Regenerate Summary</Button>
+                </div>
               </Card>
             )}
+
+            {/* AI Recommendation removed for Department Chair view */}
 
             <Card className="p-5 border-gray-200">
               <h3 className="font-serif font-semibold mb-3 flex items-center gap-2">
@@ -216,7 +259,10 @@ export const EvaluatorReviewPage = () => {
                           {doc.ocr_status === 'completed' && <CheckCircle2 className="w-3 h-3 text-green-600" />}
                           {doc.ocr_status === 'processing' && <Loader2 className="w-3 h-3 animate-spin text-yellow-600" />}
                           {doc.ocr_status === 'failed' && <XCircle className="w-3 h-3 text-red-600" />}
-                          <Eye className="w-3 h-3 text-gray-400 group-hover:text-maroon" />
+                          <div className="text-xs text-gray-500 group-hover:text-maroon flex items-center gap-1">
+                            <Eye className="w-3 h-3" />
+                            <span>Preview</span>
+                          </div>
                         </div>
                       </div>
                       <div className="truncate font-medium text-gray-800">{doc.file_name}</div>
@@ -283,13 +329,13 @@ export const EvaluatorReviewPage = () => {
                 </TabsList>
                 
                 <TabsContent value="all">
-                  <MatchesList matches={matches} onApprove={handleApproveMatch} onReject={handleRejectMatch} getConfidenceColor={getConfidenceColor} disabled={isFinalized} />
+                  <MatchesList matches={matches} onApprove={handleApproveMatch} onReject={handleRejectMatch} getConfidenceColor={getConfidenceColor} disabled={isFinalized} curriculum={curriculum} />
                 </TabsContent>
                 <TabsContent value="tor">
-                  <MatchesList matches={torMatches} onApprove={handleApproveMatch} onReject={handleRejectMatch} getConfidenceColor={getConfidenceColor} disabled={isFinalized} />
+                  <MatchesList matches={torMatches} onApprove={handleApproveMatch} onReject={handleRejectMatch} getConfidenceColor={getConfidenceColor} disabled={isFinalized} curriculum={curriculum} />
                 </TabsContent>
                 <TabsContent value="work">
-                  <MatchesList matches={workMatches} onApprove={handleApproveMatch} onReject={handleRejectMatch} getConfidenceColor={getConfidenceColor} disabled={isFinalized} />
+                  <MatchesList matches={workMatches} onApprove={handleApproveMatch} onReject={handleRejectMatch} getConfidenceColor={getConfidenceColor} disabled={isFinalized} curriculum={curriculum} />
                 </TabsContent>
               </Tabs>
             </Card>
@@ -330,6 +376,18 @@ export const EvaluatorReviewPage = () => {
               </Card>
             )}
 
+            {application?.status === 'finalized' && (
+              <Card className="p-5 border-gray-200">
+                <h3 className="font-serif font-semibold mb-3">Reopen Application</h3>
+                <p className="text-sm text-gray-600 mb-3">Move this finalized application back to Under Review.</p>
+                <div className="flex gap-2">
+                  <Button onClick={handleReopen} disabled={actioning} className="bg-maroon text-white" data-testid="reopen-btn">
+                    {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : 'Move to Under Review'}
+                  </Button>
+                </div>
+              </Card>
+            )}
+
             {isFinalized && application?.evaluator_note && (
               <Card className="p-5 border-gray-200 bg-gray-50">
                 <h3 className="font-serif font-semibold mb-2">Department Chair Note</h3>
@@ -350,7 +408,7 @@ export const EvaluatorReviewPage = () => {
   );
 };
 
-const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disabled }) => {
+const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disabled, curriculum }) => {
   if (matches.length === 0) {
     return <p className="text-sm text-gray-500 py-4">No matches in this category</p>;
   }
@@ -384,11 +442,15 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
                   </Badge>
                 )}
               </div>
-              {match.curriculum_subject && (
+              {match.curriculum_subject ? (
                 <div className="text-sm">
                   <span className="font-semibold">{match.curriculum_subject.code}</span>
                   <span className="ml-2">{match.curriculum_subject.title}</span>
                   <span className="ml-2 text-xs text-gray-500">({match.curriculum_subject.units}u)</span>
+                </div>
+              ) : (
+                <div className="text-sm text-gray-600">
+                  <Badge className="bg-red-50 text-red-700 text-xs">Not credited</Badge>
                 </div>
               )}
               {match.tor_subject && (
@@ -413,31 +475,71 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
             
             {!disabled && match.status === 'pending' && (
               <div className="flex flex-col gap-1">
-                <Button 
-                  size="sm" 
-                  variant="ghost" 
-                  className="text-green-600 hover:bg-green-50 h-7 text-xs"
-                  onClick={() => onApprove(match.id)}
-                  data-testid={`approve-match-${match.id}`}
-                >
-                  <CheckCircle2 className="w-3 h-3 mr-1" />
-                  Approve
-                </Button>
-                <Button 
-                  size="sm" 
-                  variant="ghost" 
-                  className="text-red-600 hover:bg-red-50 h-7 text-xs"
-                  onClick={() => onReject(match.id)}
-                  data-testid={`reject-match-${match.id}`}
-                >
-                  <XCircle className="w-3 h-3 mr-1" />
-                  Reject
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button 
+                    size="sm" 
+                    variant="ghost" 
+                    className="text-green-600 hover:bg-green-50 h-7 text-xs"
+                    onClick={() => onApprove(match.id)}
+                    data-testid={`approve-match-${match.id}`}
+                  >
+                    <CheckCircle2 className="w-3 h-3 mr-1" />
+                    Approve
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    variant="ghost" 
+                    className="text-red-600 hover:bg-red-50 h-7 text-xs"
+                    onClick={() => onReject(match.id)}
+                    data-testid={`reject-match-${match.id}`}
+                  >
+                    <XCircle className="w-3 h-3 mr-1" />
+                    Reject
+                  </Button>
+                </div>
+
+                {/* If unmatched, allow assigning a curriculum subject and approving in one action */}
+                {!match.curriculum_subject && curriculum && curriculum.length > 0 && (
+                  <AssignAndApprove match={match} curriculum={curriculum} onApprove={onApprove} />
+                )}
               </div>
             )}
           </div>
         </div>
       ))}
+    </div>
+  );
+};
+
+const AssignAndApprove = ({ match, curriculum, onApprove }) => {
+  const [selected, setSelected] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const handleAssign = async () => {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      // call override then approve
+      await subjectMatchApi.override(match.id, { curriculum_subject_id: selected, note: 'Assigned by chair' });
+      await subjectMatchApi.approve(match.id, 'Approved after manual assignment');
+      onApprove(match.id);
+    } catch (e) {
+      // fallback: just call onApprove to refresh
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="flex items-center gap-2 mt-2">
+      <select className="border px-2 py-1 text-sm" value={selected} onChange={(e) => setSelected(e.target.value)}>
+        <option value="">Assign curriculum subject</option>
+        {curriculum.map(c => (
+          <option key={c.id} value={c.id}>{c.code} - {c.title} ({c.units}u)</option>
+        ))}
+      </select>
+      <Button size="sm" onClick={handleAssign} disabled={!selected || busy} className="text-xs">
+        {busy ? 'Assigning...' : 'Assign & Approve'}
+      </Button>
     </div>
   );
 };

@@ -20,7 +20,8 @@ from .serializers import (
     TORDocumentSerializer, ChatMessageSerializer,
     ApplicantDocumentSerializer, ApplicationSerializer
 )
-from .gemini_service import gemini_service
+from .gemini_service import gemini_service, LOCAL_SUBJECT_PATTERN, fitz
+from .views import _get_work_experience_evidence
 
 
 @api_view(['GET'])
@@ -100,14 +101,17 @@ def upload_document(request):
         file_path=saved_path,
         file_size=len(file_content),
         mime_type=mime_type,
-        ocr_status='pending' if document_type == 'tor' else 'not_applicable'
+        ocr_status='pending' if document_type in ['tor', 'job_description'] else 'not_applicable'
     )
     
-    # Process TOR with OCR (synchronous wrapper around async Gemini call)
-    if document_type == 'tor':
+    # Process TOR and Job Description with OCR (synchronous wrapper around async Gemini call)
+    if document_type in ['tor', 'job_description']:
         try:
             file_base64 = base64.b64encode(file_content).decode('utf-8')
-            process_tor_ocr_sync(doc.id, file_base64)
+            if document_type == 'tor':
+                process_tor_ocr_sync(doc.id, file_base64)
+            else:
+                process_job_description_ocr_sync(doc.id, file_base64)
         except Exception as e:
             print(f"OCR error: {e}")
             doc.ocr_status = 'failed'
@@ -117,6 +121,99 @@ def upload_document(request):
         ApplicantDocumentSerializer(doc).data,
         status=status.HTTP_201_CREATED
     )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def upload_curriculum(request):
+    """Upload a curriculum PDF for a program and parse subjects.
+
+    Expects: program_code (e.g., 'BSIT'), file_name, file_data (base64), mime_type
+    Only admin users can upload/replace curriculum.
+    """
+    # Allow admin and evaluators (department chairs) to upload curricula
+    if request.user.role not in ['admin', 'evaluator']:
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    program_code = request.data.get('program_code')
+    file_name = request.data.get('file_name', f'curriculum_{uuid.uuid4()}.pdf')
+    file_data = request.data.get('file_data')
+    mime_type = request.data.get('mime_type', 'application/pdf')
+
+    if not program_code or not file_data:
+        return Response({'error': 'program_code and file_data are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        program = Program.objects.get(code__iexact=program_code)
+    except Program.DoesNotExist:
+        return Response({'error': 'Program not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Decode base64
+    if isinstance(file_data, str) and 'base64,' in file_data:
+        _, file_data = file_data.split('base64,', 1)
+
+    try:
+        file_content = base64.b64decode(file_data)
+    except Exception as e:
+        return Response({'error': f'Invalid file data: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Save file
+    saved_filename = f"curricula/{program.code}_{uuid.uuid4()}.pdf"
+    saved_path = default_storage.save(saved_filename, ContentFile(file_content))
+
+    # Extract text using fitz if available
+    text = ''
+    try:
+        if fitz:
+            # default_storage path may be abstract; open file via default_storage
+            with default_storage.open(saved_path, 'rb') as f:
+                doc = fitz.open(stream=f.read(), filetype='pdf')
+                for page in doc:
+                    text += page.get_text('text') + '\n'
+        else:
+            return Response({'error': 'PDF text extraction not available (missing fitz).'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except Exception as e:
+        return Response({'error': f'Failed to extract PDF text: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # Parse subjects using LOCAL_SUBJECT_PATTERN from gemini_service
+    subjects = []
+    try:
+        for m in LOCAL_SUBJECT_PATTERN.finditer(text):
+            code = (m.group('code') or '').strip()
+            title = (m.group('title') or '').strip()
+            units_raw = m.group('units') if m.group('units') else '0'
+            try:
+                units = int(float(units_raw))
+            except Exception:
+                units = 0
+            subjects.append({'code': code, 'title': title, 'units': units})
+    except Exception as e:
+        return Response({'error': f'Failed to parse curriculum subjects: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # If preview flag set, return parsed subjects without saving
+    preview = bool(request.data.get('preview', False))
+    if preview:
+        return Response({'preview': True, 'subjects': subjects})
+
+    # Replace existing curriculum for this program
+    CurriculumSubject.objects.filter(program=program).delete()
+
+    created = []
+    for s in subjects:
+        if not s['code']:
+            continue
+        cs = CurriculumSubject.objects.create(
+            program=program,
+            code=s['code'],
+            title=s['title'][:255],
+            description='',
+            units=s['units'] or 0,
+            year=0,
+            semester=0
+        )
+        created.append({'id': str(cs.id), 'code': cs.code, 'title': cs.title, 'units': cs.units})
+
+    return Response({'message': 'Curriculum uploaded', 'created_count': len(created), 'subjects': created})
 
 
 def process_tor_ocr_sync(doc_id, image_base64):
@@ -149,6 +246,31 @@ def process_tor_ocr_sync(doc_id, image_base64):
     
     except Exception as e:
         print(f"OCR processing error: {str(e)}")
+        try:
+            doc = ApplicantDocument.objects.get(id=doc_id)
+            doc.ocr_status = 'failed'
+            doc.save()
+        except Exception:
+            pass
+
+
+def process_job_description_ocr_sync(doc_id, image_base64):
+    """Synchronous wrapper for job description extraction"""
+    try:
+        doc = ApplicantDocument.objects.get(id=doc_id)
+        doc.ocr_status = 'processing'
+        doc.save()
+
+        work_data = async_to_sync(gemini_service.extract_work_experience_from_job_description)(image_base64)
+
+        doc.ocr_raw = json.dumps(work_data) if work_data else ''
+        doc.extracted_text = json.dumps(work_data) if work_data else ''
+
+        doc.ocr_status = 'completed'
+        doc.save()
+
+    except Exception as e:
+        print(f"Job description OCR processing error: {str(e)}")
         try:
             doc = ApplicantDocument.objects.get(id=doc_id)
             doc.ocr_status = 'failed'
@@ -229,9 +351,7 @@ def run_full_evaluation_sync(application_id):
     # Clear existing matches
     SubjectMatch.objects.filter(application=application).delete()
     
-    work_experiences_list = list(WorkExperience.objects.filter(application=application).values(
-        'job_title', 'years', 'job_description'
-    ))
+    work_experiences_list = _get_work_experience_evidence(application)
     work_exp_objects = list(WorkExperience.objects.filter(application=application))
     
     # Step 1: Course Recommendation based on work experience

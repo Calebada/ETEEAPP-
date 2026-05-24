@@ -1,5 +1,7 @@
 from rest_framework import serializers
+from django.conf import settings
 from django.contrib.auth import authenticate
+import requests
 from .models import (
     User, Program, CurriculumSubject, Application,
     TORDocument, TORSubject, SubjectMatch, Prediction,
@@ -32,6 +34,65 @@ class RegisterSerializer(serializers.ModelSerializer):
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
+
+    def _authenticate_with_supabase(self, email, password):
+        supabase_url = getattr(settings, 'SUPABASE_URL', '').strip().rstrip('/')
+        supabase_anon_key = getattr(settings, 'SUPABASE_ANON_KEY', '').strip()
+
+        if not supabase_url or not supabase_anon_key:
+            return None
+
+        try:
+            response = requests.post(
+                f'{supabase_url}/auth/v1/token?grant_type=password',
+                headers={
+                    'apikey': supabase_anon_key,
+                    'Authorization': f'Bearer {supabase_anon_key}',
+                    'Content-Type': 'application/json',
+                },
+                json={'email': email, 'password': password},
+                timeout=15,
+            )
+        except requests.RequestException:
+            return None
+
+        if response.status_code != 200:
+            return None
+
+        payload = response.json()
+        supabase_user = payload.get('user') or {}
+        metadata = supabase_user.get('user_metadata') or {}
+        full_name = (
+            metadata.get('full_name')
+            or metadata.get('name')
+            or supabase_user.get('email', email).split('@')[0]
+        )
+
+        user, created = User.objects.get_or_create(
+            email=email,
+            defaults={
+                'full_name': full_name,
+                'role': 'applicant',
+            }
+        )
+
+        updated_fields = []
+        if created or not user.full_name:
+            user.full_name = full_name
+            updated_fields.append('full_name')
+
+        if not user.check_password(password):
+            user.set_password(password)
+            updated_fields.append('password')
+
+        if not user.is_active:
+            user.is_active = True
+            updated_fields.append('is_active')
+
+        if updated_fields:
+            user.save(update_fields=updated_fields)
+
+        return user
     
     def validate(self, data):
         email = data.get('email')
@@ -39,6 +100,8 @@ class LoginSerializer(serializers.Serializer):
         
         if email and password:
             user = authenticate(email=email, password=password)
+            if not user:
+                user = self._authenticate_with_supabase(email, password)
             if not user:
                 raise serializers.ValidationError('Invalid credentials')
             if not user.is_active:
