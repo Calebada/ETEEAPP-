@@ -430,8 +430,89 @@ Rules:
     async def match_subject(self, tor_subject_data, curriculum_subjects):
         """Match a TOR subject against curriculum subjects using AI"""
         try:
+            def _local_match_subjects():
+                matches = []
+                tor_code = (tor_subject_data.get('code') or '').upper().replace(' ', '').replace('-', '')
+                tor_title = (tor_subject_data.get('title') or '').lower()
+                stopwords = {
+                    'and', 'for', 'the', 'with', 'from', 'into', 'that', 'this', 'of', 'in', 'on', 'to', 'a', 'an',
+                    'it', 'ii', 'iii', 'iv', 'v', '1', '2', '3', '4', '5', 'semester', 'course', 'courses', 'subject',
+                    'subjects', 'fundamentals', 'introduction', 'intro', 'basic', 'basics'
+                }
+
+                def _meaningful_tokens(text):
+                    tokens = set()
+                    for token in re.findall(r"\w+", text.lower()):
+                        if len(token) < 3 or token.isdigit() or token in stopwords:
+                            continue
+                        tokens.add(token)
+                    return tokens
+
+                tor_tokens = _meaningful_tokens(tor_title)
+
+                synonym_groups = [
+                    {'programming', 'coding', 'development', 'software'},
+                    {'computer', 'computing', 'it', 'information', 'technology'},
+                    {'database', 'databases', 'dbms'},
+                    {'network', 'networks', 'networking'},
+                    {'analysis', 'design', 'system', 'systems'},
+                    {'web', 'internet', 'frontend', 'backend', 'application', 'applications'},
+                    {'security', 'cybersecurity', 'safety'},
+                    {'multimedia', 'graphics', 'animation', 'media'},
+                    {'management', 'project', 'capstone', 'research'},
+                ]
+
+                def _token_similarity(a_tokens, b_tokens):
+                    if not a_tokens or not b_tokens:
+                        return 0.0
+                    inter = a_tokens.intersection(b_tokens)
+                    if not inter:
+                        return 0.0
+                    base = len(inter) / max(1, min(len(a_tokens), len(b_tokens)))
+                    bonus = 0.0
+                    for group in synonym_groups:
+                        if len(group.intersection(a_tokens)) and len(group.intersection(b_tokens)):
+                            bonus += 0.15
+                    return min(1.0, base + bonus)
+
+                for s in curriculum_subjects:
+                    ccode = (s.get('code') or '').upper().replace(' ', '').replace('-', '')
+                    ctitle = (s.get('title') or '').lower()
+                    cdesc = (s.get('description') or '').lower()
+                    cur_tokens = _meaningful_tokens(f"{ctitle} {cdesc}")
+
+                    # Exact code or code-prefix match -> high confidence
+                    if tor_code and ccode and (tor_code == ccode or tor_code in ccode or ccode in tor_code):
+                        matches.append({
+                            'curriculum_code': s['code'],
+                            'confidence': 96,
+                            'reasoning': 'Exact or prefix code match'
+                        })
+                        continue
+
+                    # Strong title/description overlap using tokens and synonyms
+                    similarity = _token_similarity(tor_tokens, cur_tokens)
+                    confidence = int(similarity * 100)
+
+                    # Add a small boost when codes look semantically related (e.g. IT, CS, NET)
+                    semantic_boost_terms = ['computer', 'programming', 'database', 'network', 'web', 'software', 'system', 'analysis']
+                    if any(term in tor_title for term in semantic_boost_terms) and any(term in ctitle or term in cdesc for term in semantic_boost_terms):
+                        confidence += 5
+
+                    if confidence >= 15:
+                        matches.append({
+                            'curriculum_code': s['code'],
+                            'confidence': min(max(confidence, 15), 99),
+                            'reasoning': 'Title/description similarity with curriculum'
+                        })
+
+                matches.sort(key=lambda x: x['confidence'], reverse=True)
+                return matches
+
+            # Local deterministic fallback when LLM is not installed or returns no usable matches
+            local_matches = _local_match_subjects()
             if not LlmChat:
-                return []
+                return local_matches
 
             chat = self._get_chat(
                 f"match-{os.urandom(8).hex()}",
@@ -464,13 +545,18 @@ Just the JSON array, no explanations."""
             
             try:
                 matches = json.loads(response_text)
-                return matches if isinstance(matches, list) else []
+                if isinstance(matches, list) and matches:
+                    return matches
+                return local_matches
             except json.JSONDecodeError:
-                return []
+                return local_matches
         
         except Exception as e:
             print(f"Error in subject matching: {str(e)}")
-            return []
+            try:
+                return _local_match_subjects()
+            except Exception:
+                return []
 
     async def summarize_applicant(self, application_evidence):
         """Generate a short summary of the applicant's work experience and job description.
@@ -592,8 +678,33 @@ Example output:
     async def match_work_experience(self, work_data, curriculum_subjects):
         """Match work experience to curriculum subjects"""
         try:
+            # Local heuristic fallback when LLM is not installed
             if not LlmChat:
-                return []
+                matches = []
+                title = (work_data.get('job_title') or '').lower()
+                desc = (work_data.get('description') or '').lower()
+                years = float(work_data.get('years') or 0)
+
+                for s in curriculum_subjects:
+                    ctitle = (s.get('title') or '').lower()
+                    cdesc = (s.get('description') or '').lower()
+
+                    # simple keyword match between job title/desc and curriculum title/desc
+                    tokens = set(re.findall(r"\w+", f"{title} {desc}"))
+                    cur_tokens = set(re.findall(r"\w+", f"{ctitle} {cdesc}"))
+                    if not tokens or not cur_tokens:
+                        continue
+                    inter = tokens.intersection(cur_tokens)
+                    score = len(inter)
+
+                    # base confidence from token overlap and years of experience
+                    confidence = int(min(95, 40 + score * 10 + min(30, int(years * 5))))
+                    if confidence >= 60:
+                        reason = f"Keyword overlap ({len(inter)} shared tokens); {years:g} years experience"
+                        matches.append({'curriculum_code': s['code'], 'confidence': confidence, 'reasoning': reason})
+
+                matches.sort(key=lambda x: x['confidence'], reverse=True)
+                return matches
 
             chat = self._get_chat(
                 f"work-{os.urandom(8).hex()}",
