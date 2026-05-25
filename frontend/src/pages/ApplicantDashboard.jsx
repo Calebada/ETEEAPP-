@@ -65,6 +65,17 @@ export const ApplicantDashboard = () => {
     setDeletingApplicationId(null);
   };
 
+  const openApplication = (app) => {
+    if (app.status === 'draft') {
+      navigate(`/applicant/apply/${app.id}`);
+      return;
+    }
+
+    if (app.status === 'finalized') {
+      navigate(`/applicant/evaluation/${app.id}`);
+    }
+  };
+
   const getStatusColor = (status) => {
     const colors = {
       draft: 'bg-gray-100 text-gray-700',
@@ -137,8 +148,8 @@ export const ApplicantDashboard = () => {
                 {applications.map((app) => (
                   <Card 
                     key={app.id} 
-                    className="p-5 border-gray-200 hover:border-maroon/30 hover:shadow-md smooth-transition cursor-pointer"
-                    onClick={() => navigate(app.status === 'draft' ? `/applicant/apply/${app.id}` : `/applicant/evaluation/${app.id}`)}
+                    className={`p-5 border-gray-200 hover:border-maroon/30 hover:shadow-md smooth-transition ${app.status === 'draft' || app.status === 'finalized' ? 'cursor-pointer' : 'cursor-default'}`}
+                    onClick={() => openApplication(app)}
                     data-testid={`application-card-${app.id}`}
                   >
                     <div className="flex items-start justify-between gap-3">
@@ -163,6 +174,12 @@ export const ApplicantDashboard = () => {
                             AI suggests: {app.recommended_program}
                           </div>
                         )}
+                        {app.status !== 'draft' && app.status !== 'finalized' && (
+                          <div className="mt-2 text-xs text-gray-500 inline-flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            Waiting for Department Chair review
+                          </div>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <Button
@@ -179,7 +196,13 @@ export const ApplicantDashboard = () => {
                             <><Trash2 className="w-4 h-4 mr-1" /> Remove</>
                           )}
                         </Button>
-                        <ArrowRight className="w-5 h-5 text-gray-400" />
+                        {app.status === 'draft' ? (
+                          <ArrowRight className="w-5 h-5 text-gray-400" />
+                        ) : app.status === 'finalized' ? (
+                          <span className="text-xs font-medium text-maroon">View Evaluation</span>
+                        ) : (
+                          <span className="text-xs font-medium text-gray-400">Pending review</span>
+                        )}
                       </div>
                     </div>
                   </Card>

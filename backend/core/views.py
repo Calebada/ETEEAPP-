@@ -486,10 +486,15 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
         if user.role in ['evaluator', 'admin']:
             queryset = SubjectMatch.objects.all()
         else:
-            queryset = SubjectMatch.objects.filter(application__applicant=user)
+            queryset = SubjectMatch.objects.filter(
+                application__applicant=user,
+                application__status='finalized'
+            )
         
         if application_id:
             queryset = queryset.filter(application_id=application_id)
+            if user.role not in ['evaluator', 'admin']:
+                queryset = queryset.filter(application__status='finalized')
         
         return queryset.select_related('tor_subject', 'curriculum_subject', 'work_experience')
     

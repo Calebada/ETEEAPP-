@@ -3,6 +3,7 @@ import json
 import asyncio
 import base64
 import re
+from difflib import SequenceMatcher
 from functools import lru_cache
 from io import BytesIO
 from dotenv import load_dotenv
@@ -569,6 +570,21 @@ Rules:
                             bonus += 0.15
                     return min(1.0, base + bonus)
 
+                def _compact(text):
+                    # Normalize spacing/punctuation so OCR-fused titles still match curriculum titles.
+                    return re.sub(r'[^a-z0-9]+', '', (text or '').lower())
+
+                def _compact_similarity(a_text, b_text):
+                    a = _compact(a_text)
+                    b = _compact(b_text)
+                    if not a or not b:
+                        return 0.0
+                    if a == b:
+                        return 1.0
+                    if a in b or b in a:
+                        return 0.95
+                    return SequenceMatcher(None, a, b).ratio()
+
                 for s in curriculum_subjects:
                     ccode = (s.get('code') or '').upper().replace(' ', '').replace('-', '')
                     ctitle = (s.get('title') or '').lower()
@@ -586,6 +602,8 @@ Rules:
 
                     # Strong title/description overlap using tokens and synonyms
                     similarity = _token_similarity(tor_tokens, cur_tokens)
+                    compact_similarity = _compact_similarity(tor_title, ctitle)
+                    similarity = max(similarity, compact_similarity)
                     confidence = int(similarity * 100)
 
                     # Add a small boost when codes look semantically related (e.g. IT, CS, NET)
@@ -594,10 +612,13 @@ Rules:
                         confidence += 5
 
                     if confidence >= 15:
+                        reason = 'Title/description similarity with curriculum'
+                        if compact_similarity >= 0.85:
+                            reason = 'High normalized title similarity (spacing-insensitive OCR-safe match)'
                         matches.append({
                             'curriculum_code': s['code'],
                             'confidence': min(max(confidence, 15), 99),
-                            'reasoning': 'Title/description similarity with curriculum'
+                            'reasoning': reason
                         })
 
                 matches.sort(key=lambda x: x['confidence'], reverse=True)

@@ -8,7 +8,7 @@ import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { applicationApi, subjectMatchApi, predictionApi } from '../lib/api';
 import {
-  ArrowLeft, Loader2, FileText, Briefcase, Flag, CheckCircle2,
+  ArrowLeft, Loader2, FileText, Briefcase, CheckCircle2,
   XCircle, AlertCircle, Calendar, BookOpen, TrendingUp, Sparkles, Download
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -28,31 +28,26 @@ export const EvaluationPage = () => {
 
   const loadData = async () => {
     try {
-      const [appResp, matchesResp, predResp] = await Promise.all([
-        applicationApi.get(id),
+      const appResp = await applicationApi.get(id);
+      const app = appResp.data;
+      setApplication(app);
+
+      if (app?.status !== 'finalized') {
+        setMatches([]);
+        setPrediction(null);
+        return;
+      }
+
+      const [matchesResp, predResp] = await Promise.all([
         subjectMatchApi.list(id),
         predictionApi.get(id).catch(() => ({ data: null }))
       ]);
-      setApplication(appResp.data);
       setMatches(matchesResp.data);
       setPrediction(predResp.data);
     } catch (err) {
       toast.error('Failed to load evaluation');
     }
     setLoading(false);
-  };
-
-  const handleFlag = async (matchId) => {
-    const note = prompt('Why are you flagging this match?');
-    if (!note) return;
-    
-    try {
-      await subjectMatchApi.flag(matchId, note);
-      toast.success('Match flagged for review');
-      loadData();
-    } catch (err) {
-      toast.error('Failed to flag');
-    }
   };
 
   const downloadReport = () => {
@@ -95,10 +90,7 @@ export const EvaluationPage = () => {
       pdf.setFontSize(14);
       pdf.setTextColor(122, 30, 43);
       pdf.text('Completion Forecast', 20, y);
-      y += 10;
-      pdf.setFontSize(10);
-      pdf.setTextColor(0);
-      pdf.text(`Estimated Semesters: ${prediction.semesters_min} - ${prediction.semesters_max}`, 20, y);
+
     }
     
     pdf.save(`ACREDIA_Report_${application.id.slice(0, 8)}.pdf`);
@@ -124,11 +116,7 @@ export const EvaluationPage = () => {
 
   const torMatches = matches.filter(m => m.source === 'tor');
   const workMatches = matches.filter(m => m.source === 'work_experience');
-  
-  const totalCredited = matches.filter(m => m.confidence >= 60).length;
-  const totalCreditedUnits = matches
-    .filter(m => m.confidence >= 60 && m.curriculum_subject)
-    .reduce((sum, m) => sum + (m.curriculum_subject?.units || 0), 0);
+  const isDecisionComplete = ['finalized', 'rejected'].includes(application?.status);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -166,7 +154,7 @@ export const EvaluationPage = () => {
         {/* Summary Cards removed as requested */}
 
         {/* AI Recommendation */}
-        {application?.recommended_program && (
+        {isDecisionComplete && application?.recommended_program && (
           <Card className="p-6 mb-6 bg-gradient-to-br from-maroon/5 to-gold/5 border-maroon/20">
             <div className="flex items-start gap-4">
               <Sparkles className="w-6 h-6 text-maroon flex-shrink-0 mt-1" />
@@ -179,33 +167,66 @@ export const EvaluationPage = () => {
           </Card>
         )}
 
+        {isDecisionComplete && application?.evaluator_note && (
+          <Card className="p-6 mb-6 border-red-200 bg-red-50/60">
+            <div className="flex items-start gap-4">
+              <XCircle className="w-6 h-6 text-red-600 flex-shrink-0 mt-1" />
+              <div>
+                <h3 className="font-serif font-semibold text-lg mb-2 text-red-800">
+                  Department Decision Note
+                </h3>
+                <p className="text-sm text-red-900 leading-6">
+                  {application.evaluator_note}
+                </p>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {!isDecisionComplete && (
+          <Card className="p-8 mb-6 border-dashed border-gray-300 bg-white">
+            <div className="text-center max-w-2xl mx-auto">
+              <AlertCircle className="w-12 h-12 text-maroon mx-auto mb-4" />
+              <h2 className="font-serif text-2xl font-bold mb-2">Evaluation in Progress</h2>
+              <p className="text-gray-600 mb-3">
+                Your TOR matches, approved and rejected subjects, and Department Chair comments will appear here after the Department Chair finalizes accreditation.
+              </p>
+              <p className="text-sm text-gray-500">
+                Please wait for the Department Chair / Evaluator to run AI Evaluation and press Finalize Accreditation.
+              </p>
+            </div>
+          </Card>
+        )}
+
         {/* Tabs for Different Views */}
-        <Tabs defaultValue="all" className="mb-8">
-          <TabsList className="mb-6">
-            <TabsTrigger value="all" data-testid="tab-all">All Matches ({matches.length})</TabsTrigger>
-            <TabsTrigger value="tor" data-testid="tab-tor">From TOR ({torMatches.length})</TabsTrigger>
-            <TabsTrigger value="work" data-testid="tab-work">From Work ({workMatches.length})</TabsTrigger>
-            {prediction && <TabsTrigger value="forecast" data-testid="tab-forecast">Study Plan</TabsTrigger>}
-          </TabsList>
-          
-          <TabsContent value="all">
-            <SubjectMatchTable matches={matches} onFlag={handleFlag} getConfidenceColor={getConfidenceColor} />
-          </TabsContent>
-          
-          <TabsContent value="tor">
-            <SubjectMatchTable matches={torMatches} onFlag={handleFlag} getConfidenceColor={getConfidenceColor} />
-          </TabsContent>
-          
-          <TabsContent value="work">
-            <SubjectMatchTable matches={workMatches} onFlag={handleFlag} getConfidenceColor={getConfidenceColor} />
-          </TabsContent>
-          
-          {prediction && (
-            <TabsContent value="forecast">
-              <ForecastView prediction={prediction} />
+        {isDecisionComplete ? (
+          <Tabs defaultValue="all" className="mb-8">
+            <TabsList className="mb-6">
+              <TabsTrigger value="all" data-testid="tab-all">All Matches ({matches.length})</TabsTrigger>
+              <TabsTrigger value="tor" data-testid="tab-tor">From TOR ({torMatches.length})</TabsTrigger>
+              <TabsTrigger value="work" data-testid="tab-work">From Work ({workMatches.length})</TabsTrigger>
+              {prediction && <TabsTrigger value="forecast" data-testid="tab-forecast">Study Plan</TabsTrigger>}
+            </TabsList>
+            
+            <TabsContent value="all">
+              <SubjectMatchTable matches={matches} getConfidenceColor={getConfidenceColor} />
             </TabsContent>
-          )}
-        </Tabs>
+            
+            <TabsContent value="tor">
+              <SubjectMatchTable matches={torMatches} getConfidenceColor={getConfidenceColor} />
+            </TabsContent>
+            
+            <TabsContent value="work">
+              <SubjectMatchTable matches={workMatches} getConfidenceColor={getConfidenceColor} />
+            </TabsContent>
+            
+            {prediction && (
+              <TabsContent value="forecast">
+                <ForecastView prediction={prediction} />
+              </TabsContent>
+            )}
+          </Tabs>
+        ) : null}
       </div>
 
       <ChatbotWidget />
@@ -213,7 +234,7 @@ export const EvaluationPage = () => {
   );
 };
 
-const SubjectMatchTable = ({ matches, onFlag, getConfidenceColor }) => {
+const SubjectMatchTable = ({ matches, getConfidenceColor }) => {
   if (matches.length === 0) {
     return (
       <Card className="p-12 text-center border-gray-200 border-dashed">
@@ -226,7 +247,11 @@ const SubjectMatchTable = ({ matches, onFlag, getConfidenceColor }) => {
   return (
     <div className="space-y-3">
       {matches.map((match) => (
-        <Card key={match.id} className="p-4 border-gray-200" data-testid={`match-card-${match.id}`}>
+        <Card
+          key={match.id}
+          className={`p-4 ${match.status === 'rejected' ? 'border-red-300 bg-red-50/40 shadow-sm' : 'border-gray-200'}`}
+          data-testid={`match-card-${match.id}`}
+        >
           <div className="flex items-start justify-between gap-4">
             <div className="flex-1">
               <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -240,10 +265,28 @@ const SubjectMatchTable = ({ matches, onFlag, getConfidenceColor }) => {
                     <><Briefcase className="w-3 h-3 mr-1" /> Credited from Work Experience</>
                   )}
                 </Badge>
-                {match.flagged_by_applicant && (
-                  <Badge className="bg-orange-100 text-orange-700">
-                    <Flag className="w-3 h-3 mr-1" />
-                    Flagged
+                {match.status === 'approved' && (
+                  <Badge className="bg-green-100 text-green-700 border-green-300">
+                    <CheckCircle2 className="w-3 h-3 mr-1" />
+                    Approved
+                  </Badge>
+                )}
+                {match.status === 'rejected' && (
+                  <Badge className="bg-red-100 text-red-700 border-red-300">
+                    <XCircle className="w-3 h-3 mr-1" />
+                    Rejected
+                  </Badge>
+                )}
+                {match.status === 'overridden' && (
+                  <Badge className="bg-blue-100 text-blue-700 border-blue-300">
+                    <CheckCircle2 className="w-3 h-3 mr-1" />
+                    Overridden
+                  </Badge>
+                )}
+                {match.status === 'pending' && (
+                  <Badge className="bg-gray-100 text-gray-700 border-gray-300">
+                    <AlertCircle className="w-3 h-3 mr-1" />
+                    Pending Review
                   </Badge>
                 )}
               </div>
@@ -271,24 +314,22 @@ const SubjectMatchTable = ({ matches, onFlag, getConfidenceColor }) => {
                       <strong>AI Reasoning:</strong> {match.matching_reason}
                     </div>
                   )}
+                  {match.status === 'rejected' && match.evaluator_note && (
+                    <div className="text-xs text-red-800 mt-2 bg-white p-3 rounded border border-red-200">
+                      <div className="font-semibold text-red-700 mb-1">Reason for Rejection</div>
+                      <div>{match.evaluator_note}</div>
+                    </div>
+                  )}
+                  {match.status === 'approved' && match.evaluator_note && (
+                    <div className="text-xs text-green-700 mt-2 bg-green-50 p-2 rounded border border-green-100">
+                      <strong>Department Chair Note:</strong> {match.evaluator_note}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-sm text-gray-500">No curriculum match found</div>
               )}
             </div>
-            
-            {!match.flagged_by_applicant && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onFlag(match.id)}
-                className="text-orange-600 hover:bg-orange-50"
-                data-testid={`flag-btn-${match.id}`}
-              >
-                <Flag className="w-4 h-4 mr-1" />
-                Flag
-              </Button>
-            )}
           </div>
         </Card>
       ))}

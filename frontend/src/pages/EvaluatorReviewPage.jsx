@@ -8,7 +8,7 @@ import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Textarea } from '../components/ui/textarea';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { applicationApi, subjectMatchApi, predictionApi, programApi } from '../lib/api';
 import {
   ArrowLeft, Loader2, FileText, Briefcase, CheckCircle2, XCircle,
@@ -32,10 +32,52 @@ export const EvaluatorReviewPage = () => {
   const [previewDoc, setPreviewDoc] = useState(null);
   const [previewFocus, setPreviewFocus] = useState(null);
   const [torEvidenceMatch, setTorEvidenceMatch] = useState(null);
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectMatchId, setRejectMatchId] = useState(null);
 
   const openDocumentPreview = (doc, focus = null) => {
     setPreviewDoc(doc);
     setPreviewFocus(focus);
+  };
+
+  const getDetailedTorMatchExplanation = (payload) => {
+    const match = payload?.match;
+    const evidence = payload?.evidence || [];
+    if (!match) return [];
+
+    const normalize = (val) => (val || '').toString().toUpperCase().replace(/\s|-/g, '');
+    const torCode = normalize(match?.tor_subject?.code);
+    const curCode = normalize(match?.curriculum_subject?.code);
+    const confidence = Number(match?.confidence || 0).toFixed(0);
+    const codeAligned = !!torCode && !!curCode && torCode === curCode;
+    const extractedHits = evidence.filter((item) => !!item.subjectEvidence).length;
+
+    const details = [];
+    if (codeAligned) {
+      details.push(`The TOR subject code ${match.tor_subject?.code || 'N/A'} directly aligns with the matched curriculum code ${match.curriculum_subject?.code || 'N/A'}.`);
+    } else {
+      details.push(`The TOR and curriculum subjects were matched based on title/description similarity, not exact code equality.`);
+      details.push(`TOR: ${match.tor_subject?.title || 'N/A'} | Curriculum: ${match.curriculum_subject?.title || 'N/A'}`);
+    }
+
+    details.push(`The AI assigned ${confidence}% confidence for this match.`);
+
+    if (match?.matching_reason) {
+      details.push(`AI rationale: ${match.matching_reason}`);
+    }
+
+    if (extractedHits > 0) {
+      details.push(`Verification: This subject was found in ${extractedHits} extracted TOR row(s) from uploaded document proof.`);
+    } else {
+      details.push('Verification: The exact extracted row was not found in parsed TOR text, so manual document checking is recommended.');
+    }
+
+    if (match?.tor_subject?.grade) {
+      details.push(`Applicant grade evidence: ${match.tor_subject.grade}.`);
+    }
+
+    return details;
   };
 
   useEffect(() => {
@@ -84,13 +126,30 @@ export const EvaluatorReviewPage = () => {
   };
 
   const handleRejectMatch = async (matchId) => {
+    setRejectMatchId(matchId);
+    setRejectReason('');
+    setRejectDialogOpen(true);
+  };
+
+  const submitRejectMatch = async () => {
+    const trimmedReason = rejectReason.trim();
+    if (!trimmedReason) {
+      toast.error('Please provide a short rejection reason');
+      return;
+    }
+
+    setActioning(true);
     try {
-      await subjectMatchApi.reject(matchId, '');
+      await subjectMatchApi.reject(rejectMatchId, trimmedReason);
       toast.success('Match rejected');
+      setRejectDialogOpen(false);
+      setRejectMatchId(null);
+      setRejectReason('');
       loadData();
     } catch (err) {
       toast.error('Failed');
     }
+    setActioning(false);
   };
 
   const handleFinalize = async () => {
@@ -476,6 +535,17 @@ export const EvaluatorReviewPage = () => {
                 </div>
               </div>
 
+              <div className="rounded-lg border border-maroon/20 bg-maroon/5 p-4">
+                <div className="text-sm font-semibold text-maroon mb-2">Why This Subject Matched</div>
+                <div className="space-y-1.5">
+                  {getDetailedTorMatchExplanation(torEvidenceMatch).map((line, index) => (
+                    <p key={index} className="text-xs text-gray-700 leading-5">
+                      {line}
+                    </p>
+                  ))}
+                </div>
+              </div>
+
               <div className="rounded-lg border border-gray-200 p-4">
                 <div className="text-sm font-semibold text-gray-700 mb-2">TOR Document Proof</div>
                 <div className="space-y-3">
@@ -521,6 +591,59 @@ export const EvaluatorReviewPage = () => {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={rejectDialogOpen}
+        onOpenChange={(open) => {
+          setRejectDialogOpen(open);
+          if (!open) {
+            setRejectMatchId(null);
+            setRejectReason('');
+          }
+        }}
+      >
+        <DialogContent className="max-w-xl" data-testid="reject-reason-modal">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-700">
+              <XCircle className="w-5 h-5" />
+              Reason for Rejecting
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">
+              Enter a short reason why this subject match is being rejected. This note will be shown to the applicant in the View Evaluation page.
+            </p>
+            <Textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Example: TOR subject title does not align with the BSIT curriculum and the units are incomplete."
+              className="min-h-[140px]"
+              data-testid="reject-reason-input"
+            />
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setRejectDialogOpen(false)}
+              disabled={actioning}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={submitRejectMatch}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              disabled={actioning}
+              data-testid="submit-reject-reason"
+            >
+              {actioning ? 'Saving...' : 'Reject Subject'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -642,6 +765,31 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
     return evidence;
   };
 
+  const getShortMatchReason = (match) => {
+    const confidence = Number(match?.confidence || 0);
+    const sourceLabel = match?.source === 'tor' ? 'TOR' : 'work experience';
+
+    if (match?.source === 'tor' && match?.tor_subject && match?.curriculum_subject) {
+      const torCode = normalize(match.tor_subject.code);
+      const curCode = normalize(match.curriculum_subject.code);
+      const codeAligned = torCode && curCode && torCode === curCode;
+      if (codeAligned) {
+        return `Matched by exact subject code alignment (${match.tor_subject.code} = ${match.curriculum_subject.code}) with ${confidence.toFixed(0)}% confidence.`;
+      }
+      return `Matched by subject title similarity between TOR and curriculum with ${confidence.toFixed(0)}% confidence.`;
+    }
+
+    if (match?.source === 'work_experience' && match?.work_experience && match?.curriculum_subject) {
+      return `Matched from ${match.work_experience.job_title} experience to ${match.curriculum_subject.code} based on skill overlap (${confidence.toFixed(0)}% confidence).`;
+    }
+
+    if (!match?.curriculum_subject) {
+      return `No strong curriculum equivalent was found from ${sourceLabel} evidence yet.`;
+    }
+
+    return `Matched from ${sourceLabel} evidence with ${confidence.toFixed(0)}% confidence.`;
+  };
+
   if (matches.length === 0) {
     return <p className="text-sm text-gray-500 py-4">No matches in this category</p>;
   }
@@ -719,6 +867,9 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
               {match.matching_reason && (
                 <div className="text-xs text-gray-600 italic mt-1">{match.matching_reason}</div>
               )}
+              <div className="text-xs text-gray-700 mt-2 bg-gray-50 border border-gray-200 rounded px-2 py-1">
+                <span className="font-semibold">Why matched:</span> {getShortMatchReason(match)}
+              </div>
               {match.applicant_note && (
                 <div className="text-xs bg-orange-50 rounded p-1.5 mt-2">
                   <strong>Applicant note:</strong> {match.applicant_note}

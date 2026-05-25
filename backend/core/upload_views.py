@@ -670,6 +670,11 @@ def get_predictions(request):
         application = Application.objects.get(id=application_id)
         if application.applicant != request.user and request.user.role not in ['evaluator', 'admin']:
             return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        if request.user.role == 'applicant' and application.status != 'finalized':
+            return Response(
+                {'error': 'Results are not available until the Department Chair finalizes accreditation'},
+                status=status.HTTP_403_FORBIDDEN
+            )
     except Application.DoesNotExist:
         return Response({'error': 'Application not found'}, status=status.HTTP_404_NOT_FOUND)
     
