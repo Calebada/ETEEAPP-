@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { ChatbotWidget } from '../components/ChatbotWidget';
@@ -12,9 +12,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { applicationApi, subjectMatchApi, predictionApi, programApi } from '../lib/api';
 import {
   ArrowLeft, Loader2, FileText, Briefcase, CheckCircle2, XCircle,
-  AlertCircle, BookOpen, User, Calendar, MapPin, Phone, Sparkles, Flag, Eye
+  AlertCircle, BookOpen, User, Calendar, MapPin, Phone, Sparkles, Flag, Eye, Download, Home
 } from 'lucide-react';
 import { toast } from 'sonner';
+import jsPDF from 'jspdf';
 
 export const EvaluatorReviewPage = () => {
   const { id } = useParams();
@@ -35,6 +36,118 @@ export const EvaluatorReviewPage = () => {
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectMatchId, setRejectMatchId] = useState(null);
+  const [finalizationComplete, setFinalizationComplete] = useState(false);
+  const approvedTableRef = useRef(null);
+
+  const downloadApprovedAsPDF = () => {
+    try {
+      const approved = matches.filter(m => m.status === 'approved');
+      if (approved.length === 0) {
+        toast.error('No approved subjects to download');
+        return;
+      }
+
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const margin = 10;
+      let yPosition = margin + 10;
+
+      // Add title
+      doc.setFontSize(16);
+      doc.setFont(undefined, 'bold');
+      doc.text('Approved Subjects Report', margin, yPosition);
+      yPosition += 10;
+
+      // Add metadata
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'normal');
+      doc.text(`Application ID: ${application?.id || 'N/A'}`, margin, yPosition);
+      yPosition += 6;
+      doc.text(`Applicant: ${application?.applicant?.first_name} ${application?.applicant?.last_name}`, margin, yPosition);
+      yPosition += 6;
+      doc.text(`Date: ${new Date().toLocaleDateString()}`, margin, yPosition);
+      yPosition += 10;
+
+      // Table headers
+      const colWidths = [25, 65, 20, 40, 25];
+      const headers = ['Code', 'Title', 'Units', 'Source', 'Confidence'];
+      
+      // Draw header row
+      doc.setFillColor(37, 99, 235);
+      doc.setTextColor(255, 255, 255);
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(10);
+
+      let xPosition = margin;
+      headers.forEach((header, idx) => {
+        doc.rect(xPosition, yPosition - 5, colWidths[idx], 8, 'F');
+        doc.text(header, xPosition + 1, yPosition, { maxWidth: colWidths[idx] - 2 });
+        xPosition += colWidths[idx];
+      });
+
+      yPosition += 10;
+      doc.setTextColor(0, 0, 0);
+      doc.setFont(undefined, 'normal');
+
+      // Draw data rows
+      approved.forEach((match, idx) => {
+        if (yPosition > doc.internal.pageSize.getHeight() - margin) {
+          doc.addPage();
+          yPosition = margin;
+        }
+
+        // Alternating row colors
+        if (idx % 2 === 0) {
+          doc.setFillColor(245, 245, 245);
+          doc.rect(margin, yPosition - 5, pageWidth - 2 * margin, 8, 'F');
+        }
+
+        const rowData = [
+          match.curriculum_subject?.code || 'N/A',
+          match.curriculum_subject?.title || 'N/A',
+          match.curriculum_subject?.units || 0,
+          match.source === 'tor' ? 'TOR' : 'Work Exp',
+          `${match.confidence.toFixed(0)}%`
+        ];
+
+        xPosition = margin;
+        rowData.forEach((data, idx) => {
+          const dataStr = String(data);
+          doc.text(dataStr, xPosition + 1, yPosition, { 
+            maxWidth: colWidths[idx] - 2,
+            align: idx === 2 || idx === 4 ? 'center' : 'left'
+          });
+          xPosition += colWidths[idx];
+        });
+
+        // Draw borders
+        doc.setDrawColor(200, 200, 200);
+        xPosition = margin;
+        headers.forEach((_, idx) => {
+          doc.rect(xPosition, yPosition - 5, colWidths[idx], 8);
+          xPosition += colWidths[idx];
+        });
+
+        yPosition += 8;
+      });
+
+      // Add summary footer
+      yPosition += 5;
+      const totalUnits = approved.reduce((sum, match) => sum + (match.curriculum_subject?.units || 0), 0);
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(11);
+      doc.text(`Total Approved Subjects: ${approved.length}`, margin, yPosition);
+      yPosition += 7;
+      doc.text(`Total Units: ${totalUnits}`, margin, yPosition);
+
+      // Save PDF
+      doc.save(`approved-subjects-${application?.id || 'report'}.pdf`);
+      toast.success('PDF downloaded successfully');
+    } catch (error) {
+      console.error('Error downloading PDF:', error);
+      toast.error('Failed to download PDF');
+    }
+  };
 
   const openDocumentPreview = (doc, focus = null) => {
     setPreviewDoc(doc);
@@ -125,6 +238,66 @@ export const EvaluatorReviewPage = () => {
     }
   };
 
+  const handleApproveAllTorMatches = async () => {
+    const pendingTorMatches = matches.filter(m => m.source === 'tor' && m.status === 'pending');
+    
+    if (pendingTorMatches.length === 0) {
+      toast.info('No pending TOR matches to approve');
+      return;
+    }
+
+    setActioning(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const match of pendingTorMatches) {
+      try {
+        await subjectMatchApi.approve(match.id, '');
+        successCount++;
+      } catch (err) {
+        failCount++;
+      }
+    }
+
+    setActioning(false);
+    if (failCount === 0) {
+      toast.success(`All ${successCount} TOR matches approved!`);
+    } else {
+      toast.error(`Approved ${successCount}, failed ${failCount}`);
+    }
+    loadData();
+  };
+
+  const handleApproveAllWorkMatches = async () => {
+    const pendingWorkMatches = matches.filter(m => m.source === 'work_experience' && m.status === 'pending');
+    
+    if (pendingWorkMatches.length === 0) {
+      toast.info('No pending work experience matches to approve');
+      return;
+    }
+
+    setActioning(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const match of pendingWorkMatches) {
+      try {
+        await subjectMatchApi.approve(match.id, '');
+        successCount++;
+      } catch (err) {
+        failCount++;
+      }
+    }
+
+    setActioning(false);
+    if (failCount === 0) {
+      toast.success(`All ${successCount} work matches approved!`);
+    } else {
+      toast.error(`Approved ${successCount}, failed ${failCount}`);
+    }
+    loadData();
+  };
+
   const handleRejectMatch = async (matchId) => {
     setRejectMatchId(matchId);
     setRejectReason('');
@@ -157,11 +330,11 @@ export const EvaluatorReviewPage = () => {
     try {
       await applicationApi.finalize(id, { evaluator_note: evaluatorNote });
       toast.success('Application finalized!');
-      navigate('/evaluator');
+      setFinalizationComplete(true);
     } catch (err) {
       toast.error('Failed to finalize');
+      setActioning(false);
     }
-    setActioning(false);
   };
 
   const handleReject = async () => {
@@ -243,6 +416,175 @@ export const EvaluatorReviewPage = () => {
       <Navbar />
       
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" data-testid="evaluator-review-page">
+        {/* Finalization Complete Summary */}
+        {finalizationComplete && (
+          <div className="mb-8">
+            <Card className="p-8 border-green-200 bg-gradient-to-br from-green-50 to-emerald-50">
+              <div className="text-center mb-6">
+                <CheckCircle2 className="w-16 h-16 text-green-600 mx-auto mb-3" />
+                <h2 className="font-serif text-3xl font-bold text-green-900 mb-2">Accreditation Complete!</h2>
+                <p className="text-green-700">All approvals have been recorded. Below is a summary of the credited subjects.</p>
+              </div>
+
+              {/* Approved Subjects Summary */}
+              <div className="space-y-4 mb-6">
+                {(() => {
+                  const approved = matches.filter(m => m.status === 'approved');
+                  const torApproved = approved.filter(m => m.source === 'tor');
+                  const workApproved = approved.filter(m => m.source === 'work_experience');
+                  const totalUnits = approved.reduce((sum, m) => sum + (m.curriculum_subject?.units || 0), 0);
+
+                  return (
+                    <>
+                      <div className="grid grid-cols-3 gap-4 mb-4">
+                        <Card className="p-4 bg-white border-green-200">
+                          <div className="text-3xl font-bold text-green-600">{approved.length}</div>
+                          <div className="text-sm text-gray-600">Total Approved Subjects</div>
+                        </Card>
+                        <Card className="p-4 bg-white border-green-200">
+                          <div className="text-3xl font-bold text-maroon">{totalUnits}</div>
+                          <div className="text-sm text-gray-600">Total Units Credited</div>
+                        </Card>
+                        <Card className="p-4 bg-white border-green-200">
+                          <div className="text-3xl font-bold text-blue-600">{torApproved.length + workApproved.length}</div>
+                          <div className="text-sm text-gray-600">Sources (TOR + Work)</div>
+                        </Card>
+                      </div>
+
+                      {/* TOR Subjects */}
+                      {torApproved.length > 0 && (
+                        <Card className="p-4 border-blue-200 bg-blue-50/50">
+                          <h3 className="font-serif font-semibold mb-3 flex items-center gap-2 text-blue-900">
+                            <FileText className="w-5 h-5" />
+                            From Transcript of Records ({torApproved.length})
+                          </h3>
+                          <div className="space-y-2">
+                            {torApproved.map((match) => (
+                              <div key={match.id} className="bg-white rounded p-3 border border-blue-100">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="flex-1">
+                                    <div className="font-semibold text-gray-900">
+                                      {match.curriculum_subject?.code}
+                                    </div>
+                                    <div className="text-sm text-gray-700">{match.curriculum_subject?.title}</div>
+                                    {match.tor_subject && (
+                                      <div className="text-xs text-gray-600 mt-1">
+                                        From: {match.tor_subject.code} - {match.tor_subject.title}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="text-right flex-shrink-0">
+                                    <Badge className="bg-green-100 text-green-700 text-xs mb-1 block">
+                                      {match.confidence.toFixed(0)}% match
+                                    </Badge>
+                                    <div className="text-sm font-semibold text-maroon">{match.curriculum_subject?.units}u</div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </Card>
+                      )}
+
+                      {/* Work Experience Subjects */}
+                      {workApproved.length > 0 && (
+                        <Card className="p-4 border-purple-200 bg-purple-50/50">
+                          <h3 className="font-serif font-semibold mb-3 flex items-center gap-2 text-purple-900">
+                            <Briefcase className="w-5 h-5" />
+                            From Work Experience ({workApproved.length})
+                          </h3>
+                          <div className="space-y-2">
+                            {workApproved.map((match) => (
+                              <div key={match.id} className="bg-white rounded p-3 border border-purple-100">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="flex-1">
+                                    <div className="font-semibold text-gray-900">
+                                      {match.curriculum_subject?.code}
+                                    </div>
+                                    <div className="text-sm text-gray-700">{match.curriculum_subject?.title}</div>
+                                    {match.work_experience && (
+                                      <div className="text-xs text-gray-600 mt-1">
+                                        From: {match.work_experience.job_title} at {match.work_experience.company_name}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="text-right flex-shrink-0">
+                                    <Badge className="bg-green-100 text-green-700 text-xs mb-1 block">
+                                      {match.confidence.toFixed(0)}% match
+                                    </Badge>
+                                    <div className="text-sm font-semibold text-maroon">{match.curriculum_subject?.units}u</div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </Card>
+                      )}
+
+                      {/* Rejected Subjects */}
+                      {(() => {
+                        const rejected = matches.filter(m => m.status === 'rejected');
+                        return rejected.length > 0 ? (
+                          <Card className="p-4 border-red-200 bg-red-50/50">
+                            <h3 className="font-serif font-semibold mb-3 flex items-center gap-2 text-red-900">
+                              <XCircle className="w-5 h-5" />
+                              Rejected Subjects ({rejected.length})
+                            </h3>
+                            <div className="space-y-2">
+                              {rejected.map((match) => (
+                                <div key={match.id} className="bg-white rounded p-3 border border-red-100">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="flex-1">
+                                      <div className="font-semibold text-gray-900">
+                                        {match.curriculum_subject?.code || 'No Match'}
+                                      </div>
+                                      <div className="text-sm text-gray-700">{match.curriculum_subject?.title}</div>
+                                      {match.evaluator_note && (
+                                        <div className="text-xs text-red-700 mt-1 italic">
+                                          Reason: {match.evaluator_note}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </Card>
+                        ) : null;
+                      })()}
+                    </>
+                  );
+                })()}
+              </div>
+
+              <div className="flex gap-3 justify-center">
+                <Button 
+                  onClick={() => navigate('/evaluator')}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 flex items-center gap-2"
+                >
+                  <Home className="w-4 h-4" />
+                  Dashboard
+                </Button>
+                <Button 
+                  onClick={() => navigate('/evaluator')}
+                  className="bg-green-600 hover:bg-green-700 text-white px-6"
+                >
+                  Return to Queue
+                </Button>
+                <Button 
+                  onClick={() => navigate(`/evaluator/review/${id}`)}
+                  variant="outline"
+                  className="px-6"
+                >
+                  View Full Details
+                </Button>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {!finalizationComplete && (
+          <>
         {/* Header */}
         <div className="mb-6">
           <Button variant="ghost" onClick={() => navigate('/evaluator')} className="mb-4" data-testid="back-to-queue-btn">
@@ -379,24 +721,52 @@ export const EvaluatorReviewPage = () => {
           {/* Right: Matches */}
           <div className="lg:col-span-2 space-y-4">
             <Card className="p-5 border-gray-200">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                 <h3 className="font-serif font-semibold text-lg flex items-center gap-2">
                   <BookOpen className="w-5 h-5 text-maroon" />
                   Subject Matches ({matches.length})
                 </h3>
-                {!isFinalized && (
-                  <Button 
-                    onClick={handleRunAI}
-                    disabled={actioning}
-                    size="sm"
-                    variant="outline"
-                    className="border-maroon text-maroon hover:bg-maroon hover:text-white"
-                    data-testid="run-ai-eval-btn-top"
-                  >
-                    {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-                    {matches.length === 0 ? 'Run AI Evaluation' : 'Re-run AI Evaluation'}
-                  </Button>
-                )}
+                <div className="flex gap-2 flex-wrap">
+                  {!isFinalized && torMatches.filter(m => m.status === 'pending').length > 0 && (
+                    <Button 
+                      onClick={handleApproveAllTorMatches}
+                      disabled={actioning}
+                      size="sm"
+                      variant="outline"
+                      className="border-green-300 text-green-600 hover:bg-green-50"
+                      data-testid="approve-all-tor-btn"
+                    >
+                      {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                      Approve All TOR ({torMatches.filter(m => m.status === 'pending').length})
+                    </Button>
+                  )}
+                  {!isFinalized && workMatches.filter(m => m.status === 'pending').length > 0 && (
+                    <Button 
+                      onClick={handleApproveAllWorkMatches}
+                      disabled={actioning}
+                      size="sm"
+                      variant="outline"
+                      className="border-purple-300 text-purple-600 hover:bg-purple-50"
+                      data-testid="approve-all-work-btn"
+                    >
+                      {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                      Approve All Work ({workMatches.filter(m => m.status === 'pending').length})
+                    </Button>
+                  )}
+                  {!isFinalized && (
+                    <Button 
+                      onClick={handleRunAI}
+                      disabled={actioning}
+                      size="sm"
+                      variant="outline"
+                      className="border-maroon text-maroon hover:bg-maroon hover:text-white"
+                      data-testid="run-ai-eval-btn-top"
+                    >
+                      {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                      {matches.length === 0 ? 'Run AI Evaluation' : 'Re-run AI Evaluation'}
+                    </Button>
+                  )}
+                </div>
               </div>
               
               <Tabs defaultValue="all">
@@ -406,42 +776,44 @@ export const EvaluatorReviewPage = () => {
                   <TabsTrigger value="work">From Work ({workMatches.length})</TabsTrigger>
                 </TabsList>
                 
-                <TabsContent value="all">
-                  <MatchesList
-                    matches={matches}
-                    onApprove={handleApproveMatch}
-                    onReject={handleRejectMatch}
-                    getConfidenceColor={getConfidenceColor}
-                    disabled={isFinalized}
-                    curriculum={curriculum}
-                    documents={application?.documents || []}
-                    onOpenTorEvidence={setTorEvidenceMatch}
-                  />
-                </TabsContent>
-                <TabsContent value="tor">
-                  <MatchesList
-                    matches={torMatches}
-                    onApprove={handleApproveMatch}
-                    onReject={handleRejectMatch}
-                    getConfidenceColor={getConfidenceColor}
-                    disabled={isFinalized}
-                    curriculum={curriculum}
-                    documents={application?.documents || []}
-                    onOpenTorEvidence={setTorEvidenceMatch}
-                  />
-                </TabsContent>
-                <TabsContent value="work">
-                  <MatchesList
-                    matches={workMatches}
-                    onApprove={handleApproveMatch}
-                    onReject={handleRejectMatch}
-                    getConfidenceColor={getConfidenceColor}
-                    disabled={isFinalized}
-                    curriculum={curriculum}
-                    documents={application?.documents || []}
-                    onOpenTorEvidence={setTorEvidenceMatch}
-                  />
-                </TabsContent>
+                <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-white">
+                  <TabsContent value="all">
+                    <MatchesList
+                      matches={matches}
+                      onApprove={handleApproveMatch}
+                      onReject={handleRejectMatch}
+                      getConfidenceColor={getConfidenceColor}
+                      disabled={isFinalized}
+                      curriculum={curriculum}
+                      documents={application?.documents || []}
+                      onOpenTorEvidence={setTorEvidenceMatch}
+                    />
+                  </TabsContent>
+                  <TabsContent value="tor">
+                    <MatchesList
+                      matches={torMatches}
+                      onApprove={handleApproveMatch}
+                      onReject={handleRejectMatch}
+                      getConfidenceColor={getConfidenceColor}
+                      disabled={isFinalized}
+                      curriculum={curriculum}
+                      documents={application?.documents || []}
+                      onOpenTorEvidence={setTorEvidenceMatch}
+                    />
+                  </TabsContent>
+                  <TabsContent value="work">
+                    <MatchesList
+                      matches={workMatches}
+                      onApprove={handleApproveMatch}
+                      onReject={handleRejectMatch}
+                      getConfidenceColor={getConfidenceColor}
+                      disabled={isFinalized}
+                      curriculum={curriculum}
+                      documents={application?.documents || []}
+                      onOpenTorEvidence={setTorEvidenceMatch}
+                    />
+                  </TabsContent>
+                </div>
               </Tabs>
             </Card>
 
@@ -449,6 +821,97 @@ export const EvaluatorReviewPage = () => {
             {!isFinalized && (
               <Card className="p-5 border-gray-200">
                 <h3 className="font-serif font-semibold mb-3">Department Chair Decision</h3>
+                
+                {/* Summary Preview */}
+                {(() => {
+                  const approved = matches.filter(m => m.status === 'approved');
+                  const rejected = matches.filter(m => m.status === 'rejected');
+                  const pending = matches.filter(m => m.status === 'pending');
+                  
+                  if (approved.length > 0 || rejected.length > 0) {
+                    return (
+                      <div className="mb-6 space-y-4">
+                        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                          <div className="flex justify-between items-center mb-3">
+                            <h4 className="font-semibold text-blue-900 flex items-center gap-2">
+                              <CheckCircle2 className="w-4 h-4" />
+                              Approved Subjects ({approved.length})
+                            </h4>
+                            <Button
+                              onClick={downloadApprovedAsPDF}
+                              size="sm"
+                              className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2"
+                            >
+                              <Download className="w-4 h-4" />
+                              Download PDF
+                            </Button>
+                          </div>
+                          <div className="overflow-x-auto max-h-64 overflow-y-auto border border-blue-100 rounded">
+                            <table className="w-full text-sm">
+                              <thead className="sticky top-0 bg-blue-100">
+                                <tr className="border-b border-blue-200">
+                                  <th className="text-left py-2 px-2 font-semibold text-blue-900">Code</th>
+                                  <th className="text-left py-2 px-2 font-semibold text-blue-900">Title</th>
+                                  <th className="text-center py-2 px-2 font-semibold text-blue-900">Units</th>
+                                  <th className="text-left py-2 px-2 font-semibold text-blue-900">Source</th>
+                                  <th className="text-center py-2 px-2 font-semibold text-blue-900">Confidence</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {approved.map((match) => (
+                                  <tr key={match.id} className="border-b border-blue-100 hover:bg-blue-100">
+                                    <td className="py-2 px-2 font-mono text-blue-700">{match.curriculum_subject?.code || 'N/A'}</td>
+                                    <td className="py-2 px-2">{match.curriculum_subject?.title || 'N/A'}</td>
+                                    <td className="py-2 px-2 text-center font-semibold">{match.curriculum_subject?.units || 0}</td>
+                                    <td className="py-2 px-2 text-xs">
+                                      <Badge variant="outline" className="text-xs">
+                                        {match.source === 'tor' ? 'TOR' : 'Work Exp'}
+                                      </Badge>
+                                    </td>
+                                    <td className="py-2 px-2 text-center">
+                                      <Badge className="bg-green-100 text-green-700 text-xs">{match.confidence.toFixed(0)}%</Badge>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {rejected.length > 0 && (
+                          <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+                            <h4 className="font-semibold text-red-900 mb-3 flex items-center gap-2">
+                              <XCircle className="w-4 h-4" />
+                              Rejected Subjects ({rejected.length})
+                            </h4>
+                            <div className="overflow-x-auto max-h-64 overflow-y-auto border border-red-100 rounded">
+                              <table className="w-full text-sm">
+                                <thead className="sticky top-0 bg-red-100">
+                                  <tr className="border-b border-red-200">
+                                    <th className="text-left py-2 px-2 font-semibold text-red-900">Code</th>
+                                    <th className="text-left py-2 px-2 font-semibold text-red-900">Title</th>
+                                    <th className="text-left py-2 px-2 font-semibold text-red-900">Reason</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {rejected.map((match) => (
+                                    <tr key={match.id} className="border-b border-red-100 hover:bg-red-100">
+                                      <td className="py-2 px-2 font-mono text-red-700">{match.curriculum_subject?.code || 'N/A'}</td>
+                                      <td className="py-2 px-2">{match.curriculum_subject?.title || 'N/A'}</td>
+                                      <td className="py-2 px-2 text-xs italic text-red-800">{match.evaluator_note || 'No reason provided'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
+
                 <Textarea
                   placeholder="Add notes for the applicant..."
                   value={evaluatorNote}
@@ -485,9 +948,16 @@ export const EvaluatorReviewPage = () => {
               <Card className="p-5 border-gray-200">
                 <h3 className="font-serif font-semibold mb-3">Reopen Application</h3>
                 <p className="text-sm text-gray-600 mb-3">Move this finalized application back to Under Review.</p>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <Button onClick={handleReopen} disabled={actioning} className="bg-maroon text-white" data-testid="reopen-btn">
                     {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : 'Move to Under Review'}
+                  </Button>
+                  <Button 
+                    onClick={() => navigate(`/applicant/dashboard?app=${application?.id}&view=accreditation-summary`)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2"
+                  >
+                    <Eye className="w-4 h-4" />
+                    View Accreditation Summary
                   </Button>
                 </div>
               </Card>
@@ -501,6 +971,8 @@ export const EvaluatorReviewPage = () => {
             )}
           </div>
         </div>
+        </>
+        )}
       </div>
 
       <ChatbotWidget />

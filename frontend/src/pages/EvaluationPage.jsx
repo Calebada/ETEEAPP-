@@ -205,7 +205,6 @@ export const EvaluationPage = () => {
               <TabsTrigger value="all" data-testid="tab-all">All Matches ({matches.length})</TabsTrigger>
               <TabsTrigger value="tor" data-testid="tab-tor">From TOR ({torMatches.length})</TabsTrigger>
               <TabsTrigger value="work" data-testid="tab-work">From Work ({workMatches.length})</TabsTrigger>
-              {prediction && <TabsTrigger value="forecast" data-testid="tab-forecast">Study Plan</TabsTrigger>}
             </TabsList>
             
             <TabsContent value="all">
@@ -219,12 +218,6 @@ export const EvaluationPage = () => {
             <TabsContent value="work">
               <SubjectMatchTable matches={workMatches} getConfidenceColor={getConfidenceColor} />
             </TabsContent>
-            
-            {prediction && (
-              <TabsContent value="forecast">
-                <ForecastView prediction={prediction} />
-              </TabsContent>
-            )}
           </Tabs>
         ) : null}
       </div>
