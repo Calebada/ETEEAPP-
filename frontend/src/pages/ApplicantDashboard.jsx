@@ -147,7 +147,7 @@ export const ApplicantDashboard = () => {
           <>
             <div className="mb-8">
               <Button 
-                onClick={() => navigate('/applicant/dashboard')}
+                onClick={() => navigate(user.role === 'applicant' ? '/applicant' : '/evaluator')}
                 variant="ghost"
                 className="mb-4"
               >
@@ -257,7 +257,7 @@ export const ApplicantDashboard = () => {
 
             <div className="flex gap-3 justify-center">
               <Button 
-                onClick={() => navigate('/applicant/dashboard')}
+                onClick={() => navigate(user.role === 'applicant' ? '/applicant' : '/evaluator')}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-6 flex items-center gap-2"
               >
                 <Home className="w-4 h-4" />
