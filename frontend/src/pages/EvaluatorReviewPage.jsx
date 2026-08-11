@@ -953,7 +953,7 @@ export const EvaluatorReviewPage = () => {
                     {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : 'Move to Under Review'}
                   </Button>
                   <Button 
-                    onClick={() => navigate(`/applicant/dashboard?app=${application?.id}&view=accreditation-summary`)}
+                    onClick={() => navigate(`/applicant?app=${application?.id}&view=accreditation-summary`)}
                     className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2"
                   >
                     <Eye className="w-4 h-4" />

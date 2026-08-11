@@ -75,7 +75,7 @@ function App() {
           
           {/* Applicant Routes */}
           <Route path="/applicant" element={
-            <ProtectedRoute allowedRoles={['applicant']}>
+            <ProtectedRoute allowedRoles={['applicant', 'evaluator', 'admin']}>
               <ApplicantDashboard />
             </ProtectedRoute>
           } />
