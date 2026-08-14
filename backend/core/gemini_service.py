@@ -22,17 +22,23 @@ except ModuleNotFoundError:
     RapidOCR = None
 
 try:
-    from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+    from google import genai
+    from google.genai import types
 except ModuleNotFoundError:
-    LlmChat = None
-    UserMessage = None
-    ImageContent = None
+    genai = None
+    types = None
+
+try:
+    import google.generativeai as legacy_genai
+except ModuleNotFoundError:
+    legacy_genai = None
 
 load_dotenv()
 
-# Use EMERGENT_LLM_KEY first (universal key), fall back to GEMINI_API_KEY
-LLM_API_KEY = os.getenv('EMERGENT_LLM_KEY') or os.getenv('GEMINI_API_KEY')
-GEMINI_MODEL = "gemini-2.5-pro"  # Fallback model if 3.1-pro is rate-limited
+# Use GEMINI_API_KEY first, fall back to EMERGENT_LLM_KEY
+LLM_API_KEY = os.getenv('GEMINI_API_KEY') or os.getenv('EMERGENT_LLM_KEY')
+GEMINI_MODEL = "gemini-flash-latest"
+
 
 LOCAL_IT_KEYWORDS = {
     'it', 'information technology', 'software', 'developer', 'programmer',
@@ -393,21 +399,89 @@ def _local_is_it_related_text(text):
 
 class GeminiService:
     def __init__(self):
-        self.api_key = LLM_API_KEY
-    
-    def _get_chat(self, session_id, system_message):
-        if not LlmChat:
-            raise RuntimeError(
-                "emergentintegrations is not installed. AI features are unavailable in this local environment."
-            )
-        chat = LlmChat(
-            api_key=self.api_key,
-            session_id=session_id,
-            system_message=system_message
-        )
-        chat.with_model("gemini", GEMINI_MODEL)
-        return chat
-    
+        self.api_key = os.getenv('GEMINI_API_KEY') or os.getenv('EMERGENT_LLM_KEY') or ''
+        self._client = None
+        if genai and self.api_key:
+            try:
+                self._client = genai.Client(api_key=self.api_key)
+            except Exception as e:
+                print(f"Failed to initialize Google GenAI Client: {e}")
+                self._client = None
+        elif legacy_genai and self.api_key:
+            try:
+                legacy_genai.configure(api_key=self.api_key)
+            except Exception as e:
+                print(f"Failed to initialize legacy GenerativeAI: {e}")
+
+    def _get_client(self):
+        if self._client:
+            return self._client
+        self.api_key = os.getenv('GEMINI_API_KEY') or os.getenv('EMERGENT_LLM_KEY') or ''
+        if genai and self.api_key:
+            try:
+                self._client = genai.Client(api_key=self.api_key)
+                return self._client
+            except Exception:
+                pass
+        return None
+
+    async def _generate(self, contents, system_instruction=None):
+        """Asynchronously call Gemini API across client or legacy fallback."""
+        client = self._get_client()
+        self.api_key = self.api_key or os.getenv('GEMINI_API_KEY') or os.getenv('EMERGENT_LLM_KEY') or ''
+        if not client and not (legacy_genai and self.api_key):
+            return None
+
+        loop = asyncio.get_event_loop()
+
+        def _sync_call():
+            models_to_try = [GEMINI_MODEL, 'gemini-pro-latest', 'gemini-2.5-flash', 'gemini-1.5-flash']
+            if client:
+                config = None
+                if system_instruction and types:
+                    config = types.GenerateContentConfig(system_instruction=system_instruction)
+                for model_name in models_to_try:
+                    try:
+                        if config:
+                            resp = client.models.generate_content(
+                                model=model_name,
+                                contents=contents,
+                                config=config
+                            )
+                        else:
+                            resp = client.models.generate_content(
+                                model=model_name,
+                                contents=contents
+                            )
+                        if resp and resp.text:
+                            return resp.text
+                    except Exception as ex:
+                        print(f"GenAI generate error ({model_name}): {ex}")
+                        continue
+
+            if legacy_genai and self.api_key:
+                legacy_genai.configure(api_key=self.api_key)
+                for model_name in models_to_try:
+                    try:
+                        full_name = model_name if model_name.startswith('models/') else f"models/{model_name}"
+                        m = legacy_genai.GenerativeModel(
+                            model_name=full_name,
+                            system_instruction=system_instruction
+                        )
+                        resp = m.generate_content(contents)
+                        if resp and resp.text:
+                            return resp.text
+                    except Exception as ex:
+                        print(f"Legacy GenAI error ({model_name}): {ex}")
+                        continue
+            return None
+
+        try:
+            return await loop.run_in_executor(None, _sync_call)
+        except Exception as e:
+            print(f"Error in _generate: {e}")
+            return None
+
     async def extract_subjects_from_tor(self, image_base64):
         """Extract subjects from TOR image using Gemini vision"""
         try:
@@ -415,15 +489,7 @@ class GeminiService:
             local_text = _extract_local_text(file_bytes)
             local_subjects = _parse_tor_subjects_from_text(local_text)
 
-            if not LlmChat:
-                return local_subjects
-
-            chat = self._get_chat(
-                f"ocr-{os.urandom(8).hex()}",
-                "You are an expert at extracting academic transcript data from images."
-            )
-            
-            prompt = """Extract ALL subjects from this Transcript of Records (TOR) image.
+            prompt = """Extract ALL subjects from this Transcript of Records (TOR) image or document.
 
 For each subject, provide:
 - Subject Code (e.g., IT111, GE-MATH1, ENGL101)
@@ -443,23 +509,24 @@ Return ONLY a valid JSON array with this exact structure:
 
 If you cannot clearly read any field, use "UNCLEAR" for that field.
 Do not include any explanatory text, just the JSON array. Return [] if no subjects found."""
-            
-            msg = UserMessage(
-                text=prompt,
-                file_contents=[ImageContent(image_base64)]
-            )
-            
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-            
-            try:
-                subjects = json.loads(response_text)
-                if isinstance(subjects, list) and subjects:
-                    return subjects
-            except json.JSONDecodeError:
-                print(f"Failed to parse OCR response: {response_text[:200]}")
+
+            contents = [prompt]
+            if file_bytes and types:
+                mime = "application/pdf" if file_bytes.startswith(b'%PDF') else "image/png"
+                contents.append(types.Part.from_bytes(data=file_bytes, mime_type=mime))
+            elif local_text:
+                contents.append(f"Document OCR Text:\n{local_text}")
+
+            response_text = await self._generate(contents, system_instruction="You are an expert at extracting academic transcript data.")
+            if response_text:
+                cleaned = _clean_json_response(response_text)
+                try:
+                    subjects = json.loads(cleaned)
+                    if isinstance(subjects, list) and subjects:
+                        return subjects
+                except json.JSONDecodeError:
+                    print(f"Failed to parse OCR JSON response: {response_text[:200]}")
             return local_subjects
-        
         except Exception as e:
             print(f"Error in OCR extraction: {str(e)}")
             file_bytes = _decode_document_bytes(image_base64)
@@ -472,14 +539,6 @@ Do not include any explanatory text, just the JSON array. Return [] if no subjec
             file_bytes = _decode_document_bytes(image_base64)
             local_text = _extract_local_text(file_bytes)
             local_work_data = _parse_job_description_from_text(local_text)
-
-            if not LlmChat:
-                return local_work_data
-
-            chat = self._get_chat(
-                f"jobdesc-{os.urandom(8).hex()}",
-                "You extract work-experience evidence from uploaded job description documents."
-            )
 
             prompt = """Extract structured work-experience evidence from this uploaded job description or role document.
 
@@ -500,28 +559,29 @@ Rules:
 - Return a confidence score from 0 to 100.
 - Do not include explanatory text, just the JSON object."""
 
-            msg = UserMessage(
-                text=prompt,
-                file_contents=[ImageContent(image_base64)]
-            )
+            contents = [prompt]
+            if file_bytes and types:
+                mime = "application/pdf" if file_bytes.startswith(b'%PDF') else "image/png"
+                contents.append(types.Part.from_bytes(data=file_bytes, mime_type=mime))
+            elif local_text:
+                contents.append(f"Document OCR Text:\n{local_text}")
 
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-
-            try:
-                payload = json.loads(response_text)
-                if isinstance(payload, dict) and payload:
-                    return payload
-            except json.JSONDecodeError:
-                print(f"Failed to parse job description OCR response: {response_text[:200]}")
+            response_text = await self._generate(contents, system_instruction="You extract work-experience evidence from uploaded job description documents.")
+            if response_text:
+                cleaned = _clean_json_response(response_text)
+                try:
+                    payload = json.loads(cleaned)
+                    if isinstance(payload, dict) and payload:
+                        return payload
+                except json.JSONDecodeError:
+                    print(f"Failed to parse job description OCR response: {response_text[:200]}")
             return local_work_data
-
         except Exception as e:
             print(f"Error in job description extraction: {str(e)}")
             file_bytes = _decode_document_bytes(image_base64)
             local_text = _extract_local_text(file_bytes)
             return _parse_job_description_from_text(local_text)
-    
+
     async def match_subject(self, tor_subject_data, curriculum_subjects):
         """Match a TOR subject against curriculum subjects using AI"""
         try:
@@ -571,7 +631,6 @@ Rules:
                     return min(1.0, base + bonus)
 
                 def _compact(text):
-                    # Normalize spacing/punctuation so OCR-fused titles still match curriculum titles.
                     return re.sub(r'[^a-z0-9]+', '', (text or '').lower())
 
                 def _compact_similarity(a_text, b_text):
@@ -591,7 +650,6 @@ Rules:
                     cdesc = (s.get('description') or '').lower()
                     cur_tokens = _meaningful_tokens(f"{ctitle} {cdesc}")
 
-                    # Exact code or code-prefix match -> high confidence
                     if tor_code and ccode and (tor_code == ccode or tor_code in ccode or ccode in tor_code):
                         matches.append({
                             'curriculum_code': s['code'],
@@ -600,13 +658,11 @@ Rules:
                         })
                         continue
 
-                    # Strong title/description overlap using tokens and synonyms
                     similarity = _token_similarity(tor_tokens, cur_tokens)
                     compact_similarity = _compact_similarity(tor_title, ctitle)
                     similarity = max(similarity, compact_similarity)
                     confidence = int(similarity * 100)
 
-                    # Add a small boost when codes look semantically related (e.g. IT, CS, NET)
                     semantic_boost_terms = ['computer', 'programming', 'database', 'network', 'web', 'software', 'system', 'analysis']
                     if any(term in tor_title for term in semantic_boost_terms) and any(term in ctitle or term in cdesc for term in semantic_boost_terms):
                         confidence += 5
@@ -624,16 +680,8 @@ Rules:
                 matches.sort(key=lambda x: x['confidence'], reverse=True)
                 return matches
 
-            # Local deterministic fallback when LLM is not installed or returns no usable matches
             local_matches = _local_match_subjects()
-            if not LlmChat:
-                return local_matches
 
-            chat = self._get_chat(
-                f"match-{os.urandom(8).hex()}",
-                "You are an expert at academic credit evaluation and subject matching."
-            )
-            
             curriculum_list = "\n".join([
                 f"{s['code']}: {s['title']} ({s['units']} units) - {s['description']}"
                 for s in curriculum_subjects
@@ -653,18 +701,18 @@ Return ONLY a valid JSON array of matches with confidence >= 40, sorted by confi
 [{{"curriculum_code": "IT111", "confidence": 95, "reasoning": "..."}}]
 
 Just the JSON array, no explanations."""
-            
-            msg = UserMessage(text=prompt)
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-            
-            try:
-                matches = json.loads(response_text)
-                if isinstance(matches, list) and matches:
-                    return matches
-                return local_matches
-            except json.JSONDecodeError:
-                return local_matches
+
+            system_instruction = "You are an expert at academic credit evaluation and subject matching."
+            response_text = await self._generate(prompt, system_instruction=system_instruction)
+            if response_text:
+                cleaned = _clean_json_response(response_text)
+                try:
+                    matches = json.loads(cleaned)
+                    if isinstance(matches, list) and matches:
+                        return matches
+                except json.JSONDecodeError:
+                    pass
+            return local_matches
         
         except Exception as e:
             print(f"Error in subject matching: {str(e)}")
@@ -674,82 +722,12 @@ Just the JSON array, no explanations."""
                 return []
 
     async def summarize_applicant(self, application_evidence):
-        """Generate a short summary of the applicant's work experience and job description.
-
-        application_evidence: dict with keys 'work_experiences' (list) and optional 'job_docs' (list of text)
-        Returns a dict: { 'summary': str, 'highlights': [str], 'confidence': int }
-        """
+        """Generate a short summary of the applicant's work experience and job description."""
         try:
             work_exps = application_evidence.get('work_experiences', []) or []
             job_docs = application_evidence.get('job_docs', []) or []
 
-            # If no LLM available, return a deterministic summary
-            if not LlmChat:
-                # Build a simple summary from work experiences
-                lines = []
-                total_years = 0.0
-                it_related_count = 0
-                for w in work_exps:
-                    title = w.get('job_title') or ''
-                    yrs = 0
-                    try:
-                        yrs = float(w.get('years', 0) or 0)
-                    except Exception:
-                        yrs = 0
-                    total_years += yrs
-                    desc = (w.get('job_description') or '')[:200]
-                    lines.append(f"{title} ({yrs:g}y): {desc}")
-                    if _local_is_it_related_text(f"{title} {desc}"):
-                        it_related_count += 1
-
-                doc_evidence = ' '.join((d or '')[:300] for d in job_docs)
-                is_it_related = it_related_count > 0 or any(keyword in doc_evidence.lower() for keyword in LOCAL_IT_KEYWORDS)
-
-                summary = (
-                    f"Applicant has {len(work_exps)} work experience entries totalling {total_years:g} years. "
-                    f"IT-related roles detected: {it_related_count}. "
-                )
-                if doc_evidence:
-                    summary += f"Document evidence: {doc_evidence[:200]}"
-
-                highlights = []
-                if total_years > 0:
-                    highlights.append(f"Total experience: {total_years:g} years")
-                if it_related_count:
-                    highlights.append(f"IT-related roles: {it_related_count}")
-                if doc_evidence:
-                    highlights.append('Job description present')
-
-                confidence = 60 + min(30, int(it_related_count * 10))
-                return {'summary': summary, 'highlights': highlights, 'confidence': confidence}
-
-            # Use LLM to create a concise JSON summary
-            chat = self._get_chat(f"summary-{os.urandom(8).hex()}", "Summarize applicant work experience and job documents.")
-            work_text = '\n'.join([f"Title: {w.get('job_title','')} | Years: {w.get('years',0)} | Desc: {w.get('job_description','')}" for w in work_exps])
-            docs_text = '\n'.join((job_docs or []))
-            prompt = f"""You are an assistant that summarizes an applicant's work experience and uploaded job documents.
-
-Return ONLY a JSON object with keys: summary (a short paragraph), highlights (array of 3 short bullet points), confidence (0-100 integer).
-
-Work Experience:
-{work_text}
-
-Documents:
-{docs_text}
-
-Example output:
-{{"summary":"...","highlights":["...","..."],"confidence":85}}"""
-
-            msg = UserMessage(text=prompt)
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-            try:
-                payload = json.loads(response_text)
-                if isinstance(payload, dict):
-                    return payload
-            except json.JSONDecodeError:
-                print(f"Failed to parse summary response: {response_text[:200]}")
-                # fall back to the deterministic local summary
+            def _local_summary():
                 lines = []
                 total_years = 0.0
                 it_related_count = 0
@@ -785,16 +763,41 @@ Example output:
                 confidence = 60 + min(30, int(it_related_count * 10))
                 return {'summary': summary, 'highlights': highlights, 'confidence': confidence}
 
+            work_text = '\n'.join([f"Title: {w.get('job_title','')} | Years: {w.get('years',0)} | Desc: {w.get('job_description','')}" for w in work_exps])
+            docs_text = '\n'.join((job_docs or []))
+            prompt = f"""You are an assistant that summarizes an applicant's work experience and uploaded job documents.
+
+Return ONLY a JSON object with keys: summary (a short paragraph), highlights (array of 3 short bullet points), confidence (0-100 integer).
+
+Work Experience:
+{work_text}
+
+Documents:
+{docs_text}
+
+Example output:
+{{"summary":"...","highlights":["...","..."],"confidence":85}}"""
+
+            system_instruction = "Summarize applicant work experience and job documents."
+            response_text = await self._generate(prompt, system_instruction=system_instruction)
+            if response_text:
+                cleaned = _clean_json_response(response_text)
+                try:
+                    payload = json.loads(cleaned)
+                    if isinstance(payload, dict) and payload:
+                        return payload
+                except json.JSONDecodeError:
+                    pass
+            return _local_summary()
+
         except Exception as e:
             print(f"Error in summarization: {e}")
-            # fallback deterministic
-            return {'summary': 'No summary available', 'highlights': [], 'confidence': 35}
-    
+            return {'summary': 'Applicant evidence recorded.', 'highlights': [], 'confidence': 50}
+
     async def match_work_experience(self, work_data, curriculum_subjects):
         """Match work experience to curriculum subjects"""
         try:
-            # Local heuristic fallback when LLM is not installed
-            if not LlmChat:
+            def _local_match_work():
                 matches = []
                 title = (work_data.get('job_title') or '').lower()
                 desc = (work_data.get('description') or '').lower()
@@ -804,7 +807,6 @@ Example output:
                     ctitle = (s.get('title') or '').lower()
                     cdesc = (s.get('description') or '').lower()
 
-                    # simple keyword match between job title/desc and curriculum title/desc
                     tokens = set(re.findall(r"\w+", f"{title} {desc}"))
                     cur_tokens = set(re.findall(r"\w+", f"{ctitle} {cdesc}"))
                     if not tokens or not cur_tokens:
@@ -812,7 +814,6 @@ Example output:
                     inter = tokens.intersection(cur_tokens)
                     score = len(inter)
 
-                    # base confidence from token overlap and years of experience
                     confidence = int(min(95, 40 + score * 10 + min(30, int(years * 5))))
                     if confidence >= 60:
                         reason = f"Keyword overlap ({len(inter)} shared tokens); {years:g} years experience"
@@ -821,11 +822,8 @@ Example output:
                 matches.sort(key=lambda x: x['confidence'], reverse=True)
                 return matches
 
-            chat = self._get_chat(
-                f"work-{os.urandom(8).hex()}",
-                "You are an expert at evaluating work experience for academic credit through ETEEAP."
-            )
-            
+            local_matches = _local_match_work()
+
             curriculum_list = "\n".join([
                 f"{s['code']}: {s['title']} ({s['units']} units) - {s['description']}"
                 for s in curriculum_subjects
@@ -834,9 +832,9 @@ Example output:
             prompt = f"""Evaluate this work experience and identify which curriculum subjects could be credited based on demonstrated skills.
 
 Work Experience:
-Job Title: {work_data['job_title']}
-Years of Experience: {work_data['years']}
-Job Description: {work_data['description']}
+Job Title: {work_data.get('job_title','')}
+Years of Experience: {work_data.get('years',0)}
+Job Description: {work_data.get('description','')}
 
 BSIT Curriculum Subjects:
 {curriculum_list}
@@ -851,28 +849,26 @@ Return ONLY a valid JSON array sorted by confidence:
 
 Include matches with confidence >= 60. Return [] if no credit-worthy matches.
 Just the JSON array, no explanations."""
-            
-            msg = UserMessage(text=prompt)
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-            
-            try:
-                matches = json.loads(response_text)
-                return matches if isinstance(matches, list) else []
-            except json.JSONDecodeError:
-                return []
+
+            system_instruction = "You are an expert at evaluating work experience for academic credit through ETEEAP."
+            response_text = await self._generate(prompt, system_instruction=system_instruction)
+            if response_text:
+                cleaned = _clean_json_response(response_text)
+                try:
+                    matches = json.loads(cleaned)
+                    if isinstance(matches, list) and matches:
+                        return matches
+                except json.JSONDecodeError:
+                    pass
+            return local_matches
         
         except Exception as e:
             print(f"Error in work experience matching: {str(e)}")
             return []
-    
+
     async def recommend_program(self, work_experiences):
         """Recommend the best program based on work experiences"""
         def _local_recommend_program(work_experiences):
-            """Deterministic local recommender that analyzes job titles/descriptions.
-
-            Returns a dict with program, confidence, reasoning, career_alignment, strengths.
-            """
             program_keywords = {
                 'BSIT': ['developer', 'web', 'frontend', 'backend', 'software', 'it', 'ui', 'ux', 'systems', 'devops', 'technical support'],
                 'BSCS': ['data', 'machine learning', 'ml', 'algorithm', 'research', 'data scientist', 'software engineer'],
@@ -891,12 +887,10 @@ Just the JSON array, no explanations."""
                             scores[prog] += 1
                             matches[prog].append(kw)
 
-            # Choose best program by score
             best_prog = max(scores.keys(), key=lambda p: scores[p])
             best_score = scores[best_prog]
 
             if best_score == 0:
-                # No signals found - be explicit and return a neutral default
                 return {
                     'program': 'BSIT',
                     'confidence': 50,
@@ -905,7 +899,6 @@ Just the JSON array, no explanations."""
                     'strengths': []
                 }
 
-            # Confidence scaling
             confidence = min(90, 55 + best_score * 10)
             unique_matches = sorted(set(matches[best_prog]))
             reasoning = f"Keywords matched: {', '.join(unique_matches)}." if unique_matches else 'Matches found in work experience.'
@@ -919,18 +912,9 @@ Just the JSON array, no explanations."""
             }
 
         try:
-            if not LlmChat:
-                # Use deterministic local recommender when LLM is not available
-                return _local_recommend_program(work_experiences)
-
-            chat = self._get_chat(
-                f"recommend-{os.urandom(8).hex()}",
-                "You are a career counselor and academic advisor for CIT-University."
-            )
-            
             exp_summary = "\n".join([
-                f"- {exp['job_title']} ({exp['years']} years): {exp['job_description']}"
-                for exp in work_experiences
+                f"- {exp.get('job_title','')} ({exp.get('years',0)} years): {exp.get('job_description','')}"
+                for exp in work_experiences or []
             ])
             
             prompt = f"""Based on this applicant's work experience, recommend the most suitable program at CIT-University.
@@ -949,36 +933,30 @@ Return ONLY a valid JSON object:
 {{"program": "BSIT", "confidence": 90, "reasoning": "...", "career_alignment": "...", "strengths": ["..."]}}
 
 Just the JSON object, no explanations."""
-            
-            msg = UserMessage(text=prompt)
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-            
-            try:
-                recommendation = json.loads(response_text)
-                if isinstance(recommendation, dict):
-                    return recommendation
-                # If response isn't a dict, fall back to local recommender
-                return _local_recommend_program(work_experiences)
-            except json.JSONDecodeError:
-                # Fall back to deterministic recommender on parse errors
-                return _local_recommend_program(work_experiences)
+
+            system_instruction = "You are a career counselor and academic advisor for CIT-University."
+            response_text = await self._generate(prompt, system_instruction=system_instruction)
+            if response_text:
+                cleaned = _clean_json_response(response_text)
+                try:
+                    recommendation = json.loads(cleaned)
+                    if isinstance(recommendation, dict) and recommendation.get('program'):
+                        return recommendation
+                except json.JSONDecodeError:
+                    pass
+            return _local_recommend_program(work_experiences)
         
         except Exception as e:
             print(f"Error in recommendation: {str(e)}")
-            # Try deterministic recommender as a last resort
             try:
                 return _local_recommend_program(work_experiences)
             except Exception:
                 return {'program': 'BSIT', 'reasoning': 'Error generating recommendation. Please try again.', 'confidence': 0}
-    
-    async def chat_with_bot(self, conversation_history, user_message, user_context=None):
-        """Chat with the ETEEAP assistant bot"""
-        try:
-            if not LlmChat:
-                return "AI assistant is unavailable in this local environment."
 
-            system_message = """You are AcrediaBot, the AI assistant for ACREDIA, the CIT-U AI Credit Evaluation System for ETEEAP (Expanded Tertiary Education Equivalency and Accreditation Program).
+    async def chat_with_bot(self, conversation_history, user_message, user_context=None):
+        """Chat with the ETEEAP assistant bot using Google Gemini"""
+        try:
+            system_instruction = """You are AcrediaBot, the official AI assistant for ACREDIA, the CIT-U AI Credit Evaluation System for ETEEAP (Expanded Tertiary Education Equivalency and Accreditation Program) at Cebu Institute of Technology - University.
 
 Your role:
 - Help users understand the ETEEAP process
@@ -988,7 +966,7 @@ Your role:
 - Provide information about BSIT and other programs at CIT-U
 
 ETEEAP allows working professionals to get academic credit for:
-- Prior formal education (through TOR)
+- Prior formal education (through Transcript of Records - TOR)
 - Work experience (relevant job roles count for course credits)
 - Professional certifications
 - Life experiences
@@ -996,17 +974,22 @@ ETEEAP allows working professionals to get academic credit for:
 Be helpful, professional, and concise. Keep responses under 200 words."""
             
             if user_context:
-                system_message += f"\n\nUser Context: {user_context}"
+                system_instruction += f"\n\nUser Context: {user_context}"
             
-            chat = self._get_chat(
-                f"chat-{os.urandom(8).hex()}",
-                system_message
-            )
-            
-            msg = UserMessage(text=user_message)
-            response = await chat.send_message(msg)
-            
-            return response
+            contents = []
+            if conversation_history:
+                for item in conversation_history[-6:]:
+                    role = item.get('role', 'user')
+                    msg_text = item.get('content', '')
+                    if msg_text:
+                        contents.append(f"{role.capitalize()}: {msg_text}")
+            contents.append(user_message)
+            full_prompt = "\n".join(contents) if len(contents) > 1 else user_message
+
+            response_text = await self._generate(full_prompt, system_instruction=system_instruction)
+            if response_text:
+                return response_text.strip()
+            return "I apologize, but I'm having trouble processing your message right now. Please try again."
         
         except Exception as e:
             print(f"Error in chat: {str(e)}")
@@ -1014,3 +997,4 @@ Be helpful, professional, and concise. Keep responses under 200 words."""
 
 
 gemini_service = GeminiService()
+

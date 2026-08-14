@@ -1,40 +1,74 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { ChatbotWidget } from '../components/ChatbotWidget';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { useAuth } from '../lib/auth-context';
-import { applicationApi, dashboardApi } from '../lib/api';
+import { applicationApi, dashboardApi, subjectMatchApi } from '../lib/api';
 import {
   FileText, Upload, Clock, CheckCircle2, AlertCircle, ArrowRight,
-  Sparkles, Briefcase, GraduationCap, Loader2, Plus, Award, Trash2
+  Sparkles, Briefcase, GraduationCap, Loader2, Plus, Award, Trash2, AlertTriangle, Home, ArrowLeft, XCircle, Eye
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export const ApplicantDashboard = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   const [applications, setApplications] = useState([]);
   const [stats, setStats] = useState({});
   const [loading, setLoading] = useState(true);
   const [deletingApplicationId, setDeletingApplicationId] = useState(null);
+  const [deleteConfirmDialog, setDeleteConfirmDialog] = useState({ open: false, applicationId: null });
+  const [accreditationData, setAccreditationData] = useState(null);
+
+  const viewMode = searchParams.get('view');
+  const displayAppId = searchParams.get('app');
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [viewMode, displayAppId]);
 
   const loadData = async () => {
     try {
-      const [appsResp, statsResp] = await Promise.all([
-        applicationApi.list(),
-        dashboardApi.getStats()
-      ]);
-      setApplications(appsResp.data);
-      setStats(statsResp.data);
+      if (viewMode === 'accreditation-summary' && displayAppId) {
+        // Fetch specific application accreditation data
+        const appResp = await applicationApi.get(displayAppId);
+        const application = appResp.data;
+        
+        // Fetch matches for this application
+        const matchesResp = await subjectMatchApi.list(displayAppId);
+        const matches = matchesResp.data || [];
+        
+        const approved = matches.filter(m => m.status === 'approved');
+        const rejected = matches.filter(m => m.status === 'rejected');
+        
+        const torMatches = approved.filter(m => m.source === 'tor');
+        const workMatches = approved.filter(m => m.source === 'work_experience');
+        
+        const totalUnits = approved.reduce((sum, m) => sum + (m.curriculum_subject?.units || 0), 0);
+        
+        setAccreditationData({
+          application,
+          approved,
+          rejected,
+          torMatches,
+          workMatches,
+          totalUnits
+        });
+      } else {
+        const [appsResp, statsResp] = await Promise.all([
+          applicationApi.list(),
+          dashboardApi.getStats()
+        ]);
+        setApplications(appsResp.data);
+        setStats(statsResp.data);
+      }
     } catch (err) {
-      toast.error('Failed to load dashboard');
+      toast.error('Failed to load data');
     }
     setLoading(false);
   };
@@ -50,9 +84,12 @@ export const ApplicantDashboard = () => {
 
   const handleDeleteApplication = async (event, applicationId) => {
     event.stopPropagation();
-    if (!window.confirm('Delete this application? This cannot be undone.')) {
-      return;
-    }
+    setDeleteConfirmDialog({ open: true, applicationId });
+  };
+
+  const confirmDeleteApplication = async () => {
+    const applicationId = deleteConfirmDialog.applicationId;
+    setDeleteConfirmDialog({ open: false, applicationId: null });
 
     setDeletingApplicationId(applicationId);
     try {
@@ -104,6 +141,137 @@ export const ApplicantDashboard = () => {
       <Navbar />
       
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" data-testid="applicant-dashboard">
+        
+        {/* Accreditation Summary View */}
+        {viewMode === 'accreditation-summary' && accreditationData && (
+          <>
+            <div className="mb-8">
+              <Button 
+                onClick={() => navigate(user.role === 'applicant' ? '/applicant' : '/evaluator')}
+                variant="ghost"
+                className="mb-4"
+              >
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back to Dashboard
+              </Button>
+            </div>
+
+            <Card className="p-8 border-green-200 bg-green-50 mb-6">
+              <div className="flex items-start justify-between mb-6">
+                <div>
+                  <h2 className="font-serif text-3xl font-bold text-green-900 flex items-center gap-2 mb-2">
+                    <CheckCircle2 className="w-8 h-8" />
+                    Accreditation Complete!
+                  </h2>
+                  <p className="text-green-800">All approvals have been recorded. Below is a summary of the credited subjects.</p>
+                </div>
+              </div>
+
+              {/* Stats Cards */}
+              <div className="grid md:grid-cols-3 gap-4 mb-8">
+                <Card className="p-4 bg-white border-blue-100">
+                  <p className="text-sm text-gray-600 mb-1">Total Approved Subjects</p>
+                  <p className="text-3xl font-bold text-blue-600">{accreditationData.approved.length}</p>
+                </Card>
+                <Card className="p-4 bg-white border-green-100">
+                  <p className="text-sm text-gray-600 mb-1">Total Units Credited</p>
+                  <p className="text-3xl font-bold text-green-600">{accreditationData.totalUnits}</p>
+                </Card>
+                <Card className="p-4 bg-white border-purple-100">
+                  <p className="text-sm text-gray-600 mb-1">Sources (TOR + Work)</p>
+                  <p className="text-3xl font-bold text-purple-600">
+                    {(accreditationData.torMatches.length > 0 ? 1 : 0) + (accreditationData.workMatches.length > 0 ? 1 : 0)}
+                  </p>
+                </Card>
+              </div>
+
+              {/* Approved Subjects by Source */}
+              <div className="space-y-4">
+                {accreditationData.torMatches.length > 0 && (
+                  <Card className="p-4 border-blue-200 bg-blue-50">
+                    <h3 className="font-semibold text-blue-900 mb-3 flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4" />
+                      Approved from TOR ({accreditationData.torMatches.length})
+                    </h3>
+                    <div className="space-y-2">
+                      {accreditationData.torMatches.map((match) => (
+                        <div key={match.id} className="bg-white rounded p-2 text-sm border border-blue-100">
+                          <div className="flex justify-between items-start">
+                            <div className="flex-1">
+                              <span className="font-mono font-semibold text-blue-700">{match.curriculum_subject?.code}</span>
+                              <span className="text-gray-600"> - {match.curriculum_subject?.title}</span>
+                            </div>
+                            <Badge className="bg-blue-100 text-blue-700 ml-2">{match.confidence.toFixed(0)}%</Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+
+                {accreditationData.workMatches.length > 0 && (
+                  <Card className="p-4 border-purple-200 bg-purple-50">
+                    <h3 className="font-semibold text-purple-900 mb-3 flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4" />
+                      Approved from Work Experience ({accreditationData.workMatches.length})
+                    </h3>
+                    <div className="space-y-2">
+                      {accreditationData.workMatches.map((match) => (
+                        <div key={match.id} className="bg-white rounded p-2 text-sm border border-purple-100">
+                          <div className="flex justify-between items-start">
+                            <div className="flex-1">
+                              <span className="font-mono font-semibold text-purple-700">{match.curriculum_subject?.code}</span>
+                              <span className="text-gray-600"> - {match.curriculum_subject?.title}</span>
+                            </div>
+                            <Badge className="bg-purple-100 text-purple-700 ml-2">{match.confidence.toFixed(0)}%</Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+
+                {accreditationData.rejected.length > 0 && (
+                  <Card className="p-4 border-red-200 bg-red-50">
+                    <h3 className="font-semibold text-red-900 mb-3 flex items-center gap-2">
+                      <XCircle className="w-4 h-4" />
+                      Not Approved ({accreditationData.rejected.length})
+                    </h3>
+                    <div className="space-y-2">
+                      {accreditationData.rejected.map((match) => (
+                        <div key={match.id} className="bg-white rounded p-2 text-sm border border-red-100">
+                          <div>
+                            <span className="font-mono font-semibold text-red-700">{match.curriculum_subject?.code}</span>
+                            <span className="text-gray-600"> - {match.curriculum_subject?.title}</span>
+                            {match.evaluator_note && (
+                              <div className="text-xs text-red-700 mt-1 italic">Reason: {match.evaluator_note}</div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+              </div>
+            </Card>
+
+            <div className="flex gap-3 justify-center">
+              <Button 
+                onClick={() => navigate(user.role === 'applicant' ? '/applicant' : '/evaluator')}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-6 flex items-center gap-2"
+              >
+                <Home className="w-4 h-4" />
+                Return to Dashboard
+              </Button>
+            </div>
+            
+            <ChatbotWidget />
+          </>
+        )}
+
+        {/* Normal Dashboard View */}
+        {viewMode !== 'accreditation-summary' && (
+          <>
         <div className="mb-8">
           <h1 className="font-serif text-3xl sm:text-4xl font-bold mb-2">
             Welcome back, <span className="text-maroon">{user?.full_name?.split(' ')[0]}</span>
@@ -244,7 +412,49 @@ export const ApplicantDashboard = () => {
             </Card>
           </div>
         </div>
+          </>
+        )}
       </div>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteConfirmDialog.open} onOpenChange={(open) => !open && setDeleteConfirmDialog({ open: false, applicationId: null })}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6 text-red-600" />
+              </div>
+            </div>
+            <DialogTitle className="text-xl font-bold">Delete Application?</DialogTitle>
+            <DialogDescription className="text-gray-600 mt-2">
+              This action cannot be undone. The application will be permanently removed from your account.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-3 justify-end pt-4 border-t">
+            <Button
+              variant="outline"
+              onClick={() => setDeleteConfirmDialog({ open: false, applicationId: null })}
+              className="px-6"
+            >
+              No, Cancel
+            </Button>
+            <Button
+              onClick={confirmDeleteApplication}
+              className="px-6 bg-red-600 hover:bg-red-700 text-white"
+              disabled={deletingApplicationId === deleteConfirmDialog.applicationId}
+            >
+              {deletingApplicationId === deleteConfirmDialog.applicationId ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Yes, Delete'
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <ChatbotWidget />
     </div>
