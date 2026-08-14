@@ -8,7 +8,8 @@ This document explains how to install, configure, and run the ETEEAPP system (ba
 
 ---
 
-**Prerequisites**
+## Prerequisites
+
 - Git
 - Python 3.11 (recommended) or 3.10+ with virtualenv support
 - Node.js 18+ (or current LTS) and npm or Yarn
@@ -34,7 +35,7 @@ PowerShell:
 ```powershell
 cd backend
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+\.venv\Scripts\Activate.ps1
 ```
 
 macOS / Linux (bash):
@@ -60,7 +61,8 @@ Create a `.env` file (or set env vars in your shell). Minimum variables the app 
 - `DEBUG` — `True` or `False`
 - `DATABASE_URL` — optional (e.g. `sqlite:///db.sqlite3` or a Postgres URL)
 - `ALLOWED_HOSTS` — comma-separated hosts for production
-- `GEMINI_API_KEY` — (optional) API key for external LLM/GEMINI if used
+- `GEMINI_API_KEY` — **PRIMARY AI provider key** for Gemini-powered features (OCR, subject matching, work experience evaluation). Get one free at: https://aistudio.google.com/app/apikey
+- `EMERGENT_LLM_KEY` — optional alternative AI key (used only if Gemini fails/times out)
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — for Google OAuth (optional)
 - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `S3_BUCKET_NAME` — if using S3 for media
 - `REACT_APP_BACKEND_URL` — base URL for frontend API calls (e.g. `http://localhost:8000`)
@@ -71,12 +73,14 @@ Example `.env` (development):
 SECRET_KEY=dev-secret
 DEBUG=True
 DATABASE_URL=sqlite:///db.sqlite3
+GEMINI_API_KEY=your_key_here
 REACT_APP_BACKEND_URL=http://localhost:8000
 ```
 
 Note: On Windows PowerShell you can set env vars for the session:
 
 ```powershell
+$env:GEMINI_API_KEY = 'your_key_here'
 $env:REACT_APP_BACKEND_URL = 'http://localhost:8000'
 ```
 
@@ -112,6 +116,17 @@ uvicorn acredia.asgi:application --reload --host 0.0.0.0 --port 8000
 7) Optional: OCR / model dependencies
 
 The project includes OCR/LLM integration (PyMuPDF, rapidocr, onnx runtime, etc.) — these are included in `requirements.txt`. Some libraries may require system-level dependencies (Visual C++ Build Tools on Windows, or libjpeg/libpng on Linux). If you encounter installation errors, check the package docs for OS-specific prerequisites.
+
+**AI Provider Stack** (configured in `backend/core/gemini_service.py`):
+
+- **Gemini (primary)** — uses `GEMINI_API_KEY` + `google.generativeai` (fast, cheap, default model: `gemini-2.5-flash`)
+- **Emergent (fallback)** — uses `EMERGENT_LLM_KEY` + `emergentintegrations` (if installed)
+- **Local logic (last resort)** — regex/keyword matching (no API key needed)
+
+Built-in safeguards:
+- Every Gemini call is bounded by a 45-second timeout (`AI_CALL_TIMEOUT` env var)
+- If local matching is ≥90% confident (`LOCAL_MATCH_SKIP_AI_THRESHOLD`), AI is skipped entirely — saves tokens and latency
+- Default model is `gemini-2.5-flash` (fast + cheap); `gemini-2.5-pro` available for complex vision tasks
 
 ---
 
@@ -167,6 +182,7 @@ Notes:
 - Development uses SQLite by default (DATABASE_URL `sqlite:///db.sqlite3`). For production use Postgres and set `DATABASE_URL` accordingly.
 - If switching to Postgres install `psycopg2-binary` and update `requirements.txt` if necessary.
 - Keep media files out of git; add `backend/media/` to `.gitignore` (the repo currently contains some media files — consider removing them and committing the `.gitignore` change).
+- The `.env.example` file in `backend/` documents all required and optional environment variables.
 
 ---
 
@@ -175,6 +191,8 @@ Notes:
 - If `pip install` fails for heavy native packages, install Visual C++ Build Tools (Windows) or appropriate system packages (libjpeg, libpng) on Linux.
 - If the frontend shows CORS errors, ensure `REACT_APP_BACKEND_URL` matches the backend origin and set CORS allowed origins in Django settings.
 - If OCR/LLM endpoints fail, verify API keys (e.g. `GEMINI_API_KEY`) and ensure the environment has internet access to call external services.
+- If applications appear stuck in "processing" status: the AI calls have a 45-second timeout; if Gemini is slow/unavailable, the system falls back to local matching.
+- If you see ESLint warnings about `useCallback`, the frontend pages have been updated to wrap data-fetching functions properly.
 
 ---
 
@@ -184,7 +202,7 @@ Start backend (PowerShell):
 
 ```powershell
 cd backend
-.\.venv\Scripts\Activate.ps1
+\.venv\Scripts\Activate.ps1
 python manage.py migrate
 python manage.py runserver 0.0.0.0:8000
 ```
@@ -210,8 +228,3 @@ If you'd like, I can also:
 - commit this README update and push it to the repository for you,
 - add a sample `.env.example` file with the suggested variables, or
 - add a short troubleshooting script that validates Python/Node versions and required env vars.
-
----
-
-File updated: [README.md](README.md)
-

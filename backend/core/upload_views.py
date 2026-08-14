@@ -21,6 +21,9 @@ from .serializers import (
     ApplicantDocumentSerializer, ApplicationSerializer
 )
 from .gemini_service import gemini_service, LOCAL_SUBJECT_PATTERN, fitz
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from .views import _get_work_experience_evidence
 
 
@@ -344,7 +347,10 @@ def add_work_experience(request):
 def process_application(request):
     """
     Process application: match TOR subjects + work experience to curriculum
-    Generate course recommendation and predictions
+    Generate course recommendation and predictions.
+
+    Uses parallel AI calls where possible and local fast-path matching
+    to minimize latency and Gemini token usage.
     """
     application_id = request.data.get('application_id')
     

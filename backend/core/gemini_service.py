@@ -6,6 +6,7 @@ import re
 from difflib import SequenceMatcher
 from functools import lru_cache
 from io import BytesIO
+from pathlib import Path
 from dotenv import load_dotenv
 
 import numpy as np
@@ -28,11 +29,27 @@ except ModuleNotFoundError:
     UserMessage = None
     ImageContent = None
 
-load_dotenv()
+# Optional: Google Generative AI SDK (primary AI provider)
+try:
+    import google.generativeai as genai
+except ModuleNotFoundError:
+    genai = None
 
-# Use EMERGENT_LLM_KEY first (universal key), fall back to GEMINI_API_KEY
-LLM_API_KEY = os.getenv('EMERGENT_LLM_KEY') or os.getenv('GEMINI_API_KEY')
-GEMINI_MODEL = "gemini-2.5-pro"  # Fallback model if 3.1-pro is rate-limited
+# Load .env from the backend directory (same as settings.py) so the API key
+# is found regardless of the working directory the server is started from.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+# Use GEMINI_API_KEY first (primary AI provider), fall back to EMERGENT_LLM_KEY
+LLM_API_KEY = os.getenv('GEMINI_API_KEY') or os.getenv('EMERGENT_LLM_KEY')
+GEMINI_MODEL = "gemini-2.5-flash"  # Fast + cheap default (was 2.5-pro)
+GEMINI_PRO_MODEL = "gemini-2.5-pro"  # Higher quality for complex vision tasks
+
+# Timeout (seconds) for any single AI call so requests never hang indefinitely
+AI_CALL_TIMEOUT = float(os.getenv('AI_CALL_TIMEOUT', '45'))
+
+# If local matching is at least this confident, skip the AI call entirely.
+# This saves tokens and latency on obvious matches (e.g. exact subject codes).
+LOCAL_MATCH_SKIP_AI_THRESHOLD = float(os.getenv('LOCAL_MATCH_SKIP_AI_THRESHOLD', '90'))
 
 LOCAL_IT_KEYWORDS = {
     'it', 'information technology', 'software', 'developer', 'programmer',
@@ -394,35 +411,102 @@ def _local_is_it_related_text(text):
 class GeminiService:
     def __init__(self):
         self.api_key = LLM_API_KEY
-    
-    def _get_chat(self, session_id, system_message):
-        if not LlmChat:
-            raise RuntimeError(
-                "emergentintegrations is not installed. AI features are unavailable in this local environment."
-            )
-        chat = LlmChat(
-            api_key=self.api_key,
-            session_id=session_id,
-            system_message=system_message
+        self._genai_configured = False
+
+    def _ai_available(self):
+        """Check if any AI provider is available."""
+        return (LlmChat is not None) or (genai is not None and self.api_key)
+
+    def _configure_genai(self):
+        """Configure the Google Generative AI SDK once."""
+        if genai is not None and self.api_key and not self._genai_configured:
+            genai.configure(api_key=self.api_key)
+            self._genai_configured = True
+
+    def _call_gemini_blocking(self, prompt, system_message=None, image_base64=None, model=None):
+        """Blocking Gemini call, executed in a worker thread by _call_ai."""
+        self._configure_genai()
+        genai_model = genai.GenerativeModel(
+            model or GEMINI_MODEL,
+            system_instruction=system_message or None,
         )
-        chat.with_model("gemini", GEMINI_MODEL)
-        return chat
+
+        if image_base64:
+            file_bytes = _decode_document_bytes(image_base64)
+            try:
+                image = Image.open(BytesIO(file_bytes)).convert('RGB')
+                response = genai_model.generate_content([prompt, image])
+            except Exception:
+                response = genai_model.generate_content([prompt, file_bytes])
+        else:
+            response = genai_model.generate_content(prompt)
+
+        return response.text
+
+    async def _call_ai(self, prompt, system_message=None, image_base64=None, model=None):
+        """Call the AI provider (Google Gemini first, then Emergent).
+
+        The call is bounded by AI_CALL_TIMEOUT so a slow/hanging provider can
+        never block the HTTP request indefinitely.
+
+        Returns the raw text response, or None if no AI provider is available.
+        """
+        # Try Google Generative AI first (primary provider)
+        if genai is not None and self.api_key:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._call_gemini_blocking,
+                        prompt,
+                        system_message,
+                        image_base64,
+                        model,
+                    ),
+                    timeout=AI_CALL_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                print(f"Gemini AI call timed out after {AI_CALL_TIMEOUT}s; using fallback.")
+            except Exception as e:
+                print(f"Gemini AI call failed, falling back to Emergent: {str(e)}")
+
+        # Fall back to Emergent
+        if LlmChat is not None:
+            try:
+                chat = LlmChat(
+                    api_key=self.api_key,
+                    session_id=f"ai-{os.urandom(8).hex()}",
+                    system_message=system_message or ""
+                )
+                chat.with_model("gemini", model or GEMINI_MODEL)
+
+                if image_base64:
+                    msg = UserMessage(
+                        text=prompt,
+                        file_contents=[ImageContent(image_base64)]
+                    )
+                else:
+                    msg = UserMessage(text=prompt)
+
+                return await asyncio.wait_for(
+                    chat.send_message(msg), timeout=AI_CALL_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                print(f"Emergent AI call timed out after {AI_CALL_TIMEOUT}s.")
+            except Exception as e:
+                print(f"Emergent AI call failed: {str(e)}")
+
+        return None
     
     async def extract_subjects_from_tor(self, image_base64):
-        """Extract subjects from TOR image using Gemini vision"""
+        """Extract subjects from TOR image using AI vision"""
         try:
             file_bytes = _decode_document_bytes(image_base64)
             local_text = _extract_local_text(file_bytes)
             local_subjects = _parse_tor_subjects_from_text(local_text)
 
-            if not LlmChat:
+            if not self._ai_available():
                 return local_subjects
 
-            chat = self._get_chat(
-                f"ocr-{os.urandom(8).hex()}",
-                "You are an expert at extracting academic transcript data from images."
-            )
-            
             prompt = """Extract ALL subjects from this Transcript of Records (TOR) image.
 
 For each subject, provide:
@@ -443,21 +527,21 @@ Return ONLY a valid JSON array with this exact structure:
 
 If you cannot clearly read any field, use "UNCLEAR" for that field.
 Do not include any explanatory text, just the JSON array. Return [] if no subjects found."""
-            
-            msg = UserMessage(
-                text=prompt,
-                file_contents=[ImageContent(image_base64)]
+
+            response_text = await self._call_ai(
+                prompt,
+                system_message="You are an expert at extracting academic transcript data from images.",
+                image_base64=image_base64
             )
-            
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-            
-            try:
-                subjects = json.loads(response_text)
-                if isinstance(subjects, list) and subjects:
-                    return subjects
-            except json.JSONDecodeError:
-                print(f"Failed to parse OCR response: {response_text[:200]}")
+
+            if response_text:
+                response_text = _clean_json_response(response_text)
+                try:
+                    subjects = json.loads(response_text)
+                    if isinstance(subjects, list) and subjects:
+                        return subjects
+                except json.JSONDecodeError:
+                    print(f"Failed to parse OCR response: {response_text[:200]}")
             return local_subjects
         
         except Exception as e:
@@ -473,13 +557,8 @@ Do not include any explanatory text, just the JSON array. Return [] if no subjec
             local_text = _extract_local_text(file_bytes)
             local_work_data = _parse_job_description_from_text(local_text)
 
-            if not LlmChat:
+            if not self._ai_available():
                 return local_work_data
-
-            chat = self._get_chat(
-                f"jobdesc-{os.urandom(8).hex()}",
-                "You extract work-experience evidence from uploaded job description documents."
-            )
 
             prompt = """Extract structured work-experience evidence from this uploaded job description or role document.
 
@@ -500,20 +579,20 @@ Rules:
 - Return a confidence score from 0 to 100.
 - Do not include explanatory text, just the JSON object."""
 
-            msg = UserMessage(
-                text=prompt,
-                file_contents=[ImageContent(image_base64)]
+            response_text = await self._call_ai(
+                prompt,
+                system_message="You extract work-experience evidence from uploaded job description documents.",
+                image_base64=image_base64
             )
 
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-
-            try:
-                payload = json.loads(response_text)
-                if isinstance(payload, dict) and payload:
-                    return payload
-            except json.JSONDecodeError:
-                print(f"Failed to parse job description OCR response: {response_text[:200]}")
+            if response_text:
+                response_text = _clean_json_response(response_text)
+                try:
+                    payload = json.loads(response_text)
+                    if isinstance(payload, dict) and payload:
+                        return payload
+                except json.JSONDecodeError:
+                    print(f"Failed to parse job description OCR response: {response_text[:200]}")
             return local_work_data
 
         except Exception as e:
@@ -624,21 +703,16 @@ Rules:
                 matches.sort(key=lambda x: x['confidence'], reverse=True)
                 return matches
 
-            # Local deterministic fallback when LLM is not installed or returns no usable matches
+            # Local deterministic fallback when AI is not available
             local_matches = _local_match_subjects()
-            if not LlmChat:
+            if not self._ai_available():
                 return local_matches
 
-            chat = self._get_chat(
-                f"match-{os.urandom(8).hex()}",
-                "You are an expert at academic credit evaluation and subject matching."
-            )
-            
             curriculum_list = "\n".join([
                 f"{s['code']}: {s['title']} ({s['units']} units) - {s['description']}"
                 for s in curriculum_subjects
             ])
-            
+
             prompt = f"""Compare this TOR subject against the curriculum subjects and find the best match.
 
 TOR Subject:
@@ -653,18 +727,21 @@ Return ONLY a valid JSON array of matches with confidence >= 40, sorted by confi
 [{{"curriculum_code": "IT111", "confidence": 95, "reasoning": "..."}}]
 
 Just the JSON array, no explanations."""
-            
-            msg = UserMessage(text=prompt)
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-            
-            try:
-                matches = json.loads(response_text)
-                if isinstance(matches, list) and matches:
-                    return matches
-                return local_matches
-            except json.JSONDecodeError:
-                return local_matches
+
+            response_text = await self._call_ai(
+                prompt,
+                system_message="You are an expert at academic credit evaluation and subject matching."
+            )
+
+            if response_text:
+                response_text = _clean_json_response(response_text)
+                try:
+                    matches = json.loads(response_text)
+                    if isinstance(matches, list) and matches:
+                        return matches
+                except json.JSONDecodeError:
+                    pass
+            return local_matches
         
         except Exception as e:
             print(f"Error in subject matching: {str(e)}")
@@ -683,8 +760,8 @@ Just the JSON array, no explanations."""
             work_exps = application_evidence.get('work_experiences', []) or []
             job_docs = application_evidence.get('job_docs', []) or []
 
-            # If no LLM available, return a deterministic summary
-            if not LlmChat:
+            # If no AI available, return a deterministic summary
+            if not self._ai_available():
                 # Build a simple summary from work experiences
                 lines = []
                 total_years = 0.0
@@ -723,8 +800,7 @@ Just the JSON array, no explanations."""
                 confidence = 60 + min(30, int(it_related_count * 10))
                 return {'summary': summary, 'highlights': highlights, 'confidence': confidence}
 
-            # Use LLM to create a concise JSON summary
-            chat = self._get_chat(f"summary-{os.urandom(8).hex()}", "Summarize applicant work experience and job documents.")
+            # Use AI to create a concise JSON summary
             work_text = '\n'.join([f"Title: {w.get('job_title','')} | Years: {w.get('years',0)} | Desc: {w.get('job_description','')}" for w in work_exps])
             docs_text = '\n'.join((job_docs or []))
             prompt = f"""You are an assistant that summarizes an applicant's work experience and uploaded job documents.
@@ -740,50 +816,55 @@ Documents:
 Example output:
 {{"summary":"...","highlights":["...","..."],"confidence":85}}"""
 
-            msg = UserMessage(text=prompt)
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-            try:
-                payload = json.loads(response_text)
-                if isinstance(payload, dict):
-                    return payload
-            except json.JSONDecodeError:
-                print(f"Failed to parse summary response: {response_text[:200]}")
-                # fall back to the deterministic local summary
-                lines = []
-                total_years = 0.0
-                it_related_count = 0
-                for w in work_exps:
-                    title = w.get('job_title') or ''
+            response_text = await self._call_ai(
+                prompt,
+                system_message="Summarize applicant work experience and job documents."
+            )
+
+            if response_text:
+                response_text = _clean_json_response(response_text)
+                try:
+                    payload = json.loads(response_text)
+                    if isinstance(payload, dict):
+                        return payload
+                except json.JSONDecodeError:
+                    print(f"Failed to parse summary response: {response_text[:200]}")
+
+            # Fall back to deterministic local summary
+            lines = []
+            total_years = 0.0
+            it_related_count = 0
+            for w in work_exps:
+                title = w.get('job_title') or ''
+                yrs = 0
+                try:
+                    yrs = float(w.get('years', 0) or 0)
+                except Exception:
                     yrs = 0
-                    try:
-                        yrs = float(w.get('years', 0) or 0)
-                    except Exception:
-                        yrs = 0
-                    total_years += yrs
-                    desc = (w.get('job_description') or '')[:200]
-                    lines.append(f"{title} ({yrs:g}y): {desc}")
-                    if _local_is_it_related_text(f"{title} {desc}"):
-                        it_related_count += 1
+                total_years += yrs
+                desc = (w.get('job_description') or '')[:200]
+                lines.append(f"{title} ({yrs:g}y): {desc}")
+                if _local_is_it_related_text(f"{title} {desc}"):
+                    it_related_count += 1
 
-                doc_evidence = ' '.join((d or '')[:300] for d in job_docs)
-                summary = (
-                    f"Applicant has {len(work_exps)} work experience entries totalling {total_years:g} years. "
-                    f"IT-related roles detected: {it_related_count}."
-                )
-                if doc_evidence:
-                    summary += f" Document evidence: {doc_evidence[:200]}"
+            doc_evidence = ' '.join((d or '')[:300] for d in job_docs)
+            summary = (
+                f"Applicant has {len(work_exps)} work experience entries totalling {total_years:g} years. "
+                f"IT-related roles detected: {it_related_count}."
+            )
+            if doc_evidence:
+                summary += f" Document evidence: {doc_evidence[:200]}"
 
-                highlights = []
-                if total_years > 0:
-                    highlights.append(f"Total experience: {total_years:g} years")
-                if it_related_count:
-                    highlights.append(f"IT-related roles: {it_related_count}")
-                if doc_evidence:
-                    highlights.append('Job description present')
+            highlights = []
+            if total_years > 0:
+                highlights.append(f"Total experience: {total_years:g} years")
+            if it_related_count:
+                highlights.append(f"IT-related roles: {it_related_count}")
+            if doc_evidence:
+                highlights.append('Job description present')
 
-                confidence = 60 + min(30, int(it_related_count * 10))
-                return {'summary': summary, 'highlights': highlights, 'confidence': confidence}
+            confidence = 60 + min(30, int(it_related_count * 10))
+            return {'summary': summary, 'highlights': highlights, 'confidence': confidence}
 
         except Exception as e:
             print(f"Error in summarization: {e}")
@@ -793,8 +874,8 @@ Example output:
     async def match_work_experience(self, work_data, curriculum_subjects):
         """Match work experience to curriculum subjects"""
         try:
-            # Local heuristic fallback when LLM is not installed
-            if not LlmChat:
+            # Local heuristic fallback when AI is not available
+            if not self._ai_available():
                 matches = []
                 title = (work_data.get('job_title') or '').lower()
                 desc = (work_data.get('description') or '').lower()
@@ -821,16 +902,11 @@ Example output:
                 matches.sort(key=lambda x: x['confidence'], reverse=True)
                 return matches
 
-            chat = self._get_chat(
-                f"work-{os.urandom(8).hex()}",
-                "You are an expert at evaluating work experience for academic credit through ETEEAP."
-            )
-            
             curriculum_list = "\n".join([
                 f"{s['code']}: {s['title']} ({s['units']} units) - {s['description']}"
                 for s in curriculum_subjects
             ])
-            
+
             prompt = f"""Evaluate this work experience and identify which curriculum subjects could be credited based on demonstrated skills.
 
 Work Experience:
@@ -851,17 +927,21 @@ Return ONLY a valid JSON array sorted by confidence:
 
 Include matches with confidence >= 60. Return [] if no credit-worthy matches.
 Just the JSON array, no explanations."""
-            
-            msg = UserMessage(text=prompt)
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-            
-            try:
-                matches = json.loads(response_text)
-                return matches if isinstance(matches, list) else []
-            except json.JSONDecodeError:
-                return []
-        
+
+            response_text = await self._call_ai(
+                prompt,
+                system_message="You are an expert at evaluating work experience for academic credit through ETEEAP."
+            )
+
+            if response_text:
+                response_text = _clean_json_response(response_text)
+                try:
+                    matches = json.loads(response_text)
+                    return matches if isinstance(matches, list) else []
+                except json.JSONDecodeError:
+                    return []
+            return []
+
         except Exception as e:
             print(f"Error in work experience matching: {str(e)}")
             return []
@@ -919,20 +999,15 @@ Just the JSON array, no explanations."""
             }
 
         try:
-            if not LlmChat:
-                # Use deterministic local recommender when LLM is not available
+            if not self._ai_available():
+                # Use deterministic local recommender when AI is not available
                 return _local_recommend_program(work_experiences)
 
-            chat = self._get_chat(
-                f"recommend-{os.urandom(8).hex()}",
-                "You are a career counselor and academic advisor for CIT-University."
-            )
-            
             exp_summary = "\n".join([
                 f"- {exp['job_title']} ({exp['years']} years): {exp['job_description']}"
                 for exp in work_experiences
             ])
-            
+
             prompt = f"""Based on this applicant's work experience, recommend the most suitable program at CIT-University.
 
 Work Experience:
@@ -949,20 +1024,22 @@ Return ONLY a valid JSON object:
 {{"program": "BSIT", "confidence": 90, "reasoning": "...", "career_alignment": "...", "strengths": ["..."]}}
 
 Just the JSON object, no explanations."""
-            
-            msg = UserMessage(text=prompt)
-            response = await chat.send_message(msg)
-            response_text = _clean_json_response(response)
-            
-            try:
-                recommendation = json.loads(response_text)
-                if isinstance(recommendation, dict):
-                    return recommendation
-                # If response isn't a dict, fall back to local recommender
-                return _local_recommend_program(work_experiences)
-            except json.JSONDecodeError:
-                # Fall back to deterministic recommender on parse errors
-                return _local_recommend_program(work_experiences)
+
+            response_text = await self._call_ai(
+                prompt,
+                system_message="You are a career counselor and academic advisor for CIT-University."
+            )
+
+            if response_text:
+                response_text = _clean_json_response(response_text)
+                try:
+                    recommendation = json.loads(response_text)
+                    if isinstance(recommendation, dict):
+                        return recommendation
+                except json.JSONDecodeError:
+                    pass
+            # Fall back to deterministic recommender
+            return _local_recommend_program(work_experiences)
         
         except Exception as e:
             print(f"Error in recommendation: {str(e)}")
@@ -975,7 +1052,7 @@ Just the JSON object, no explanations."""
     async def chat_with_bot(self, conversation_history, user_message, user_context=None):
         """Chat with the ETEEAP assistant bot"""
         try:
-            if not LlmChat:
+            if not self._ai_available():
                 return "AI assistant is unavailable in this local environment."
 
             system_message = """You are AcrediaBot, the AI assistant for ACREDIA, the CIT-U AI Credit Evaluation System for ETEEAP (Expanded Tertiary Education Equivalency and Accreditation Program).
@@ -994,19 +1071,18 @@ ETEEAP allows working professionals to get academic credit for:
 - Life experiences
 
 Be helpful, professional, and concise. Keep responses under 200 words."""
-            
+
             if user_context:
                 system_message += f"\n\nUser Context: {user_context}"
-            
-            chat = self._get_chat(
-                f"chat-{os.urandom(8).hex()}",
-                system_message
+
+            response = await self._call_ai(
+                user_message,
+                system_message=system_message
             )
-            
-            msg = UserMessage(text=user_message)
-            response = await chat.send_message(msg)
-            
-            return response
+
+            if response:
+                return response
+            return "I apologize, but I'm having trouble processing your message right now. Please try again."
         
         except Exception as e:
             print(f"Error in chat: {str(e)}")

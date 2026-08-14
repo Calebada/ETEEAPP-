@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { ChatbotWidget } from '../components/ChatbotWidget';
@@ -193,11 +193,7 @@ export const EvaluatorReviewPage = () => {
     return details;
   };
 
-  useEffect(() => {
-    loadData();
-  }, [id]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const [appResp, matchesResp, predResp] = await Promise.all([
         applicationApi.get(id),
@@ -226,7 +222,11 @@ export const EvaluatorReviewPage = () => {
       toast.error('Failed to load application');
     }
     setLoading(false);
-  };
+  }, [id]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleApproveMatch = async (matchId) => {
     try {

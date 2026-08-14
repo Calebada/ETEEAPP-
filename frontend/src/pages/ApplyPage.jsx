@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { ChatbotWidget } from '../components/ChatbotWidget';
@@ -108,10 +108,6 @@ export const ApplyPage = () => {
   }, [application]);
 
   useEffect(() => {
-    loadApplication();
-  }, [id]);
-
-  useEffect(() => {
     return () => {
       if (pollRef.current) {
         clearInterval(pollRef.current);
@@ -124,7 +120,7 @@ export const ApplyPage = () => {
     };
   }, []);
 
-  const loadApplication = async () => {
+  const loadApplication = useCallback(async () => {
     try {
       const response = await applicationApi.get(id);
       setApplication(response.data);
@@ -140,7 +136,11 @@ export const ApplyPage = () => {
       navigate('/applicant');
     }
     setLoading(false);
-  };
+  }, [id, navigate]);
+
+  useEffect(() => {
+    loadApplication();
+  }, [loadApplication]);
 
   const savePersonalInfo = async () => {
     // Validate required personal info fields

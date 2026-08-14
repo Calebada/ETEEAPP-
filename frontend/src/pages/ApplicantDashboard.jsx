@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { ChatbotWidget } from '../components/ChatbotWidget';
@@ -28,11 +28,7 @@ export const ApplicantDashboard = () => {
   const viewMode = searchParams.get('view');
   const displayAppId = searchParams.get('app');
 
-  useEffect(() => {
-    loadData();
-  }, [viewMode, displayAppId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       if (viewMode === 'accreditation-summary' && displayAppId) {
         // Fetch specific application accreditation data
@@ -71,7 +67,11 @@ export const ApplicantDashboard = () => {
       toast.error('Failed to load data');
     }
     setLoading(false);
-  };
+  }, [viewMode, displayAppId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleStartApplication = async () => {
     try {

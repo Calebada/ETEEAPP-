@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { ChatbotWidget } from '../components/ChatbotWidget';
@@ -22,33 +22,32 @@ export const EvaluationPage = () => {
   const [prediction, setPrediction] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadData();
-  }, [id]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const appResp = await applicationApi.get(id);
       const app = appResp.data;
       setApplication(app);
 
-      if (app?.status !== 'finalized') {
+      if (app?.status === 'finalized') {
+        const [matchesResp, predResp] = await Promise.all([
+          subjectMatchApi.list(id),
+          predictionApi.get(id).catch(() => ({ data: null }))
+        ]);
+        setMatches(matchesResp.data);
+        setPrediction(predResp.data);
+      } else {
         setMatches([]);
         setPrediction(null);
-        return;
       }
-
-      const [matchesResp, predResp] = await Promise.all([
-        subjectMatchApi.list(id),
-        predictionApi.get(id).catch(() => ({ data: null }))
-      ]);
-      setMatches(matchesResp.data);
-      setPrediction(predResp.data);
     } catch (err) {
       toast.error('Failed to load evaluation');
     }
     setLoading(false);
-  };
+  }, [id]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const downloadReport = () => {
     const pdf = new jsPDF();
