@@ -333,9 +333,18 @@ class ApplicationViewSet(viewsets.ModelViewSet):
         if request.user.role not in ['evaluator', 'admin']:
             return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
 
-        # Allow reopening from finalized state (or rejected) back to under_review
+        # Reset previous review decisions so the evaluator can review the application again
+        # like a fresh under-review case and approve or reject matches manually.
+        SubjectMatch.objects.filter(application=application).update(
+            status='pending',
+            evaluator_note='',
+            flagged_by_applicant=False,
+            applicant_note=''
+        )
+
         application.status = 'under_review'
         application.finalized_at = None
+        application.evaluator_note = ''
         application.save()
         return Response(ApplicationSerializer(application).data)
     
@@ -573,8 +582,13 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
         
         match = self.get_object()
         new_curriculum_id = request.data.get('curriculum_subject_id')
+        new_tor_subject_id = request.data.get('tor_subject_id')
+
         if new_curriculum_id:
             match.curriculum_subject_id = new_curriculum_id
+        if new_tor_subject_id:
+            match.tor_subject_id = new_tor_subject_id
+
         match.status = 'overridden'
         match.evaluator_note = request.data.get('note', '')
         match.save()

@@ -10,9 +10,10 @@ import { useAuth } from '../lib/auth-context';
 import { applicationApi, dashboardApi, subjectMatchApi } from '../lib/api';
 import {
   FileText, Upload, Clock, CheckCircle2, AlertCircle, ArrowRight,
-  Sparkles, Briefcase, GraduationCap, Loader2, Plus, Award, Trash2, AlertTriangle, Home, ArrowLeft, XCircle, Eye
+  Sparkles, Briefcase, GraduationCap, Loader2, Plus, Award, Trash2, AlertTriangle, Home, ArrowLeft, XCircle, Eye, Download
 } from 'lucide-react';
 import { toast } from 'sonner';
+import jsPDF from 'jspdf';
 
 export const ApplicantDashboard = () => {
   const navigate = useNavigate();
@@ -71,6 +72,138 @@ export const ApplicantDashboard = () => {
       toast.error('Failed to load data');
     }
     setLoading(false);
+  };
+
+  const downloadAccreditationSummary = () => {
+    try {
+      if (!accreditationData) {
+        toast.error('No accreditation summary available');
+        return;
+      }
+
+      const { application, approved, rejected } = accreditationData;
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const margin = 14;
+      let yPosition = 20;
+
+      doc.setFontSize(18);
+      doc.setFont(undefined, 'bold');
+      doc.text('Accreditation Summary Report', margin, yPosition);
+      yPosition += 10;
+
+      const applicantName = application?.applicant?.full_name ||
+        `${application?.applicant?.first_name || ''} ${application?.applicant?.last_name || ''}`.trim() ||
+        'Applicant Name N/A';
+
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'normal');
+      doc.text(`Applicant: ${applicantName}`, margin, yPosition);
+      yPosition += 6;
+      doc.text(`Application ID: ${application?.id || 'N/A'}`, margin, yPosition);
+      yPosition += 6;
+      doc.text(`Date: ${new Date().toLocaleDateString()}`, margin, yPosition);
+      yPosition += 12;
+
+      const addTable = (title, rows, isRejected = false) => {
+        if (rows.length === 0) {
+          doc.setFont(undefined, 'bold');
+          doc.setFontSize(12);
+          doc.text(`${title} (0)`, margin, yPosition);
+          yPosition += 8;
+          doc.setFont(undefined, 'normal');
+          doc.text('No subjects in this category.', margin, yPosition);
+          yPosition += 10;
+          return;
+        }
+
+        doc.setFont(undefined, 'bold');
+        doc.setFontSize(12);
+        doc.text(`${title} (${rows.length})`, margin, yPosition);
+        yPosition += 8;
+
+        const headers = ['Code', 'Title', 'Units', 'Source', 'Matched TOR', 'Status'];
+        const colWidths = [22, 60, 18, 24, 44, 22];
+
+        doc.setFillColor(isRejected ? 220 : 59, isRejected ? 38 : 130, isRejected ? 38 : 246);
+        doc.setTextColor(255, 255, 255);
+        doc.setFont(undefined, 'bold');
+        doc.setFontSize(9);
+
+        let xPosition = margin;
+        headers.forEach((header, idx) => {
+          doc.rect(xPosition, yPosition - 5, colWidths[idx], 8, 'F');
+          doc.text(header, xPosition + 2, yPosition, { maxWidth: colWidths[idx] - 4 });
+          xPosition += colWidths[idx];
+        });
+
+        yPosition += 8;
+        doc.setTextColor(0, 0, 0);
+        doc.setFont(undefined, 'normal');
+
+        rows.forEach((match, idx) => {
+          if (yPosition > 270) {
+            doc.addPage();
+            yPosition = 20;
+          }
+
+          if (idx % 2 === 0) {
+            doc.setFillColor(245, 245, 245);
+            doc.rect(margin, yPosition - 5, pageWidth - margin * 2, 8, 'F');
+          }
+
+          const matchedTorValue = match.tor_subject
+            ? `${match.tor_subject.code || 'N/A'} - ${match.tor_subject.title || 'N/A'} (${match.tor_subject.units || 0}u)`
+            : 'N/A';
+
+          const values = [
+            match.curriculum_subject?.code || 'N/A',
+            match.curriculum_subject?.title || 'N/A',
+            String(match.curriculum_subject?.units || 0),
+            match.source === 'tor' ? 'TOR' : 'Work Exp',
+            matchedTorValue,
+            isRejected ? 'Rejected' : 'Approved'
+          ];
+
+          xPosition = margin;
+          values.forEach((value, columnIndex) => {
+            const text = String(value);
+            doc.text(text, xPosition + 2, yPosition, {
+              maxWidth: colWidths[columnIndex] - 4,
+              align: columnIndex === 2 ? 'center' : 'left'
+            });
+            xPosition += colWidths[columnIndex];
+          });
+
+          yPosition += 8;
+        });
+
+        yPosition += 10;
+      };
+
+      addTable('Approved Subjects', approved, false);
+      addTable('Rejected Subjects', rejected, true);
+
+      if (approved.length > 0 || rejected.length > 0) {
+        doc.setFont(undefined, 'bold');
+        doc.setFontSize(11);
+        doc.text(`Total Approved: ${approved.length}`, margin, yPosition);
+        yPosition += 7;
+        doc.text(`Total Rejected: ${rejected.length}`, margin, yPosition);
+        yPosition += 7;
+        doc.text(`Total Credited Units: ${accreditationData.totalUnits}`, margin, yPosition);
+      }
+
+      const safeName = (applicantName || 'applicant')
+        .replace(/[^a-zA-Z0-9-_ ]/g, '')
+        .replace(/\s+/g, '-')
+        .toLowerCase();
+      doc.save(`accreditation-summary-${safeName || application?.id || 'report'}.pdf`);
+      toast.success('Accreditation summary PDF downloaded');
+    } catch (error) {
+      console.error('Error downloading accreditation summary PDF:', error);
+      toast.error('Failed to download accreditation summary');
+    }
   };
 
   const handleStartApplication = async () => {
@@ -198,8 +331,18 @@ export const ApplicantDashboard = () => {
                         <div key={match.id} className="bg-white rounded p-2 text-sm border border-blue-100">
                           <div className="flex justify-between items-start">
                             <div className="flex-1">
-                              <span className="font-mono font-semibold text-blue-700">{match.curriculum_subject?.code}</span>
-                              <span className="text-gray-600"> - {match.curriculum_subject?.title}</span>
+                              <div>
+                                <span className="font-mono font-semibold text-blue-700">{match.curriculum_subject?.code}</span>
+                                <span className="text-gray-600"> - {match.curriculum_subject?.title}</span>
+                                <span className="text-xs text-blue-600 ml-2">({match.curriculum_subject?.units}u)</span>
+                              </div>
+                              {match.tor_subject && (
+                                <div className="mt-1 text-xs text-gray-700">
+                                  Matched TOR: <span className="font-medium text-gray-800">{match.tor_subject.code}</span> - {match.tor_subject.title}
+                                  <span className="text-purple-600 ml-1">({match.tor_subject.units || 0}u)</span>
+                                  {match.tor_subject.grade ? ` [${match.tor_subject.grade}]` : ''}
+                                </div>
+                              )}
                             </div>
                             <Badge className="bg-blue-100 text-blue-700 ml-2">{match.confidence.toFixed(0)}%</Badge>
                           </div>
@@ -220,8 +363,18 @@ export const ApplicantDashboard = () => {
                         <div key={match.id} className="bg-white rounded p-2 text-sm border border-purple-100">
                           <div className="flex justify-between items-start">
                             <div className="flex-1">
-                              <span className="font-mono font-semibold text-purple-700">{match.curriculum_subject?.code}</span>
-                              <span className="text-gray-600"> - {match.curriculum_subject?.title}</span>
+                              <div>
+                                <span className="font-mono font-semibold text-purple-700">{match.curriculum_subject?.code}</span>
+                                <span className="text-gray-600"> - {match.curriculum_subject?.title}</span>
+                                <span className="text-xs text-purple-600 ml-2">({match.curriculum_subject?.units}u)</span>
+                              </div>
+                              {match.tor_subject && (
+                                <div className="mt-1 text-xs text-gray-700">
+                                  Matched TOR: <span className="font-medium text-gray-800">{match.tor_subject.code}</span> - {match.tor_subject.title}
+                                  <span className="text-purple-600 ml-1">({match.tor_subject.units || 0}u)</span>
+                                  {match.tor_subject.grade ? ` [${match.tor_subject.grade}]` : ''}
+                                </div>
+                              )}
                             </div>
                             <Badge className="bg-purple-100 text-purple-700 ml-2">{match.confidence.toFixed(0)}%</Badge>
                           </div>
@@ -243,6 +396,12 @@ export const ApplicantDashboard = () => {
                           <div>
                             <span className="font-mono font-semibold text-red-700">{match.curriculum_subject?.code}</span>
                             <span className="text-gray-600"> - {match.curriculum_subject?.title}</span>
+                            <span className="text-xs text-red-600 ml-2">({match.curriculum_subject?.units}u)</span>
+                            {match.tor_subject && (
+                              <div className="mt-1 text-xs text-gray-700">
+                                From TOR: <span className="font-medium text-gray-800">{match.tor_subject.code}</span> ({match.tor_subject.units || 0}u)
+                              </div>
+                            )}
                             {match.evaluator_note && (
                               <div className="text-xs text-red-700 mt-1 italic">Reason: {match.evaluator_note}</div>
                             )}
@@ -255,7 +414,14 @@ export const ApplicantDashboard = () => {
               </div>
             </Card>
 
-            <div className="flex gap-3 justify-center">
+            <div className="flex gap-3 justify-center flex-wrap mt-6">
+              <Button 
+                onClick={downloadAccreditationSummary}
+                className="bg-green-600 hover:bg-green-700 text-white px-6 flex items-center gap-2"
+              >
+                <Download className="w-4 h-4" />
+                Download Summary
+              </Button>
               <Button 
                 onClick={() => navigate(user.role === 'applicant' ? '/applicant' : '/evaluator')}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-6 flex items-center gap-2"

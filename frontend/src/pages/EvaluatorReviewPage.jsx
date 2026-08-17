@@ -24,6 +24,7 @@ export const EvaluatorReviewPage = () => {
   const [matches, setMatches] = useState([]);
   const [prediction, setPrediction] = useState(null);
   const [curriculum, setCurriculum] = useState([]);
+  const [torSubjects, setTorSubjects] = useState([]);
   const [appSummary, setAppSummary] = useState(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -207,7 +208,9 @@ export const EvaluatorReviewPage = () => {
       setApplication(appResp.data);
       setMatches(matchesResp.data);
       setPrediction(predResp.data);
+      setTorSubjects(appResp.data.tor_subjects || []);
       setEvaluatorNote(appResp.data.evaluator_note || '');
+      setFinalizationComplete(appResp.data.status === 'finalized' || appResp.data.status === 'rejected');
       // load curriculum for the application's program so evaluator can assign subjects
       try {
         if (appResp.data && appResp.data.program && appResp.data.program.id) {
@@ -239,7 +242,7 @@ export const EvaluatorReviewPage = () => {
   };
 
   const handleApproveAllTorMatches = async () => {
-    const pendingTorMatches = matches.filter(m => m.source === 'tor' && m.status === 'pending');
+    const pendingTorMatches = matches.filter(m => m.source === 'tor' && m.status === 'pending' && m.curriculum_subject);
     
     if (pendingTorMatches.length === 0) {
       toast.info('No pending TOR matches to approve');
@@ -269,7 +272,7 @@ export const EvaluatorReviewPage = () => {
   };
 
   const handleApproveAllWorkMatches = async () => {
-    const pendingWorkMatches = matches.filter(m => m.source === 'work_experience' && m.status === 'pending');
+    const pendingWorkMatches = matches.filter(m => m.source === 'work_experience' && m.status === 'pending' && m.curriculum_subject);
     
     if (pendingWorkMatches.length === 0) {
       toast.info('No pending work experience matches to approve');
@@ -355,9 +358,10 @@ export const EvaluatorReviewPage = () => {
 
   const handleReopen = async () => {
     setActioning(true);
+    setFinalizationComplete(false);
     try {
       await applicationApi.reopen(id);
-      toast.success('Application moved to Under Review');
+      toast.success('Application moved to Under Review. Click Re-run AI Evaluation to refresh the subject matches.');
       loadData();
     } catch (err) {
       toast.error('Failed to reopen application');
@@ -407,8 +411,26 @@ export const EvaluatorReviewPage = () => {
     );
   }
 
-  const torMatches = matches.filter(m => m.source === 'tor');
-  const workMatches = matches.filter(m => m.source === 'work_experience');
+  const torMatches = matches.filter(m => m.source === 'tor' && m.curriculum_subject);
+  const workMatches = matches.filter(m => m.source === 'work_experience' && m.curriculum_subject);
+  const allMatchedItems = matches.filter(m => m.curriculum_subject);
+  
+  // Find unmatched curriculum subjects
+  const matchedCurriculumIds = new Set(allMatchedItems.map(m => m.curriculum_subject?.id));
+  const unmatchedCurriculum = (curriculum || []).filter(c => !matchedCurriculumIds.has(c.id));
+  
+  // Find TOR subjects that are already matched to a curriculum subject (excluding rejected matches)
+  const matchedTorSubjectIds = new Set(
+    matches
+      .filter(m => m.tor_subject && m.curriculum_subject && m.status !== 'rejected')
+      .map(m => m.tor_subject.id)
+  );
+
+  // Available TOR subjects left after matching (to display in dropdown)
+  const availableTorSubjects = (application?.tor_subjects || []).filter(
+    s => !matchedTorSubjectIds.has(s.id)
+  );
+
   const isFinalized = application?.status === 'finalized' || application?.status === 'rejected';
 
   return (
@@ -557,7 +579,7 @@ export const EvaluatorReviewPage = () => {
                 })()}
               </div>
 
-              <div className="flex gap-3 justify-center">
+              <div className="flex gap-3 justify-center flex-wrap">
                 <Button 
                   onClick={() => navigate('/evaluator')}
                   className="bg-blue-600 hover:bg-blue-700 text-white px-6 flex items-center gap-2"
@@ -570,6 +592,14 @@ export const EvaluatorReviewPage = () => {
                   className="bg-green-600 hover:bg-green-700 text-white px-6"
                 >
                   Return to Queue
+                </Button>
+                <Button 
+                  onClick={handleReopen}
+                  disabled={actioning}
+                  className="bg-maroon text-white px-6"
+                >
+                  {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                  Move to Under Review
                 </Button>
                 <Button 
                   onClick={() => navigate(`/evaluator/review/${id}`)}
@@ -767,11 +797,16 @@ export const EvaluatorReviewPage = () => {
                     </Button>
                   )}
                 </div>
+                {!isFinalized && (
+                  <p className="text-xs text-gray-600 mt-2">
+                    AI evaluation does not run automatically when reopening a finalized application. Click “Re-run AI Evaluation” to display the latest subject matches.
+                  </p>
+                )}
               </div>
               
               <Tabs defaultValue="all">
                 <TabsList className="mb-4">
-                  <TabsTrigger value="all">All ({matches.length})</TabsTrigger>
+                  <TabsTrigger value="all">All ({allMatchedItems.length})</TabsTrigger>
                   <TabsTrigger value="tor">From TOR ({torMatches.length})</TabsTrigger>
                   <TabsTrigger value="work">From Work ({workMatches.length})</TabsTrigger>
                 </TabsList>
@@ -779,7 +814,7 @@ export const EvaluatorReviewPage = () => {
                 <div className="max-h-96 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-white">
                   <TabsContent value="all">
                     <MatchesList
-                      matches={matches}
+                      matches={allMatchedItems}
                       onApprove={handleApproveMatch}
                       onReject={handleRejectMatch}
                       getConfidenceColor={getConfidenceColor}
@@ -787,6 +822,7 @@ export const EvaluatorReviewPage = () => {
                       curriculum={curriculum}
                       documents={application?.documents || []}
                       onOpenTorEvidence={setTorEvidenceMatch}
+                      torSubjects={application?.tor_subjects || []}
                     />
                   </TabsContent>
                   <TabsContent value="tor">
@@ -799,6 +835,7 @@ export const EvaluatorReviewPage = () => {
                       curriculum={curriculum}
                       documents={application?.documents || []}
                       onOpenTorEvidence={setTorEvidenceMatch}
+                      torSubjects={application?.tor_subjects || []}
                     />
                   </TabsContent>
                   <TabsContent value="work">
@@ -811,11 +848,33 @@ export const EvaluatorReviewPage = () => {
                       curriculum={curriculum}
                       documents={application?.documents || []}
                       onOpenTorEvidence={setTorEvidenceMatch}
+                      torSubjects={application?.tor_subjects || []}
                     />
                   </TabsContent>
                 </div>
               </Tabs>
             </Card>
+
+            {/* Unmatched Curriculum Section */}
+            {unmatchedCurriculum.length > 0 && (
+              <Card className="p-5 border-orange-200 bg-orange-50">
+                <h3 className="font-serif font-semibold mb-3 text-orange-900">Unmatched BSIT Curriculum ({unmatchedCurriculum.length})</h3>
+                <p className="text-xs text-orange-700 mb-4">These BSIT subjects have no match yet. Select an applicant's scanned subject to match or mark as not applicable.</p>
+                
+                <div className="space-y-3 max-h-96 overflow-y-auto">
+                  {unmatchedCurriculum.map((curSubject) => (
+                    <UnmatchedCurriculumItem
+                      key={curSubject.id}
+                      curriculum={curSubject}
+                      torSubjects={availableTorSubjects}
+                      matches={matches}
+                      onMatched={loadData}
+                      isFinalized={isFinalized}
+                    />
+                  ))}
+                </div>
+              </Card>
+            )}
 
             {/* Action Panel */}
             {!isFinalized && (
@@ -832,19 +891,11 @@ export const EvaluatorReviewPage = () => {
                     return (
                       <div className="mb-6 space-y-4">
                         <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-                          <div className="flex justify-between items-center mb-3">
+                          <div className="mb-3">
                             <h4 className="font-semibold text-blue-900 flex items-center gap-2">
                               <CheckCircle2 className="w-4 h-4" />
                               Approved Subjects ({approved.length})
                             </h4>
-                            <Button
-                              onClick={downloadApprovedAsPDF}
-                              size="sm"
-                              className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2"
-                            >
-                              <Download className="w-4 h-4" />
-                              Download PDF
-                            </Button>
                           </div>
                           <div className="overflow-x-auto max-h-64 overflow-y-auto border border-blue-100 rounded">
                             <table className="w-full text-sm">
@@ -1191,7 +1242,110 @@ export const EvaluatorReviewPage = () => {
   );
 };
 
-const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disabled, curriculum, documents, onOpenTorEvidence }) => {
+const UnmatchedCurriculumItem = ({ curriculum, torSubjects, matches, onMatched, isFinalized }) => {
+  const [selectedTor, setSelectedTor] = useState('');
+  const [actioning, setActioning] = useState(false);
+
+  const handleApprove = async () => {
+    if (!selectedTor) {
+      toast.info("Please select an applicant's subject first");
+      return;
+    }
+    setActioning(true);
+    try {
+      const existingMatch = (matches || []).find(m => m.tor_subject?.id === selectedTor);
+      if (existingMatch) {
+        await subjectMatchApi.override(existingMatch.id, {
+          curriculum_subject_id: curriculum.id,
+          note: 'Manually assigned by evaluator from unmatched curriculum'
+        });
+        await subjectMatchApi.approve(existingMatch.id, 'Approved');
+      }
+      toast.success(`"${curriculum.code}" approved with selected TOR subject`);
+      setSelectedTor('');
+      if (onMatched) {
+        onMatched();
+      }
+    } catch (e) {
+      toast.error('Failed to approve match: ' + (e.response?.data?.error || e.message));
+    } finally {
+      setActioning(false);
+    }
+  };
+
+  const handleNotApplicable = () => {
+    toast.info(`"${curriculum.code}" marked as not applicable for this applicant`);
+    setSelectedTor('');
+  };
+
+  return (
+    <div className="border border-orange-200 rounded-lg p-3 bg-white">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1">
+          <div className="mb-2 p-2 bg-blue-50 rounded border border-blue-200">
+            <div className="text-xs font-semibold text-blue-700 mb-1">BSIT Curriculum:</div>
+            <div className="text-sm">
+              <span className="font-semibold">{curriculum.code}</span>
+              <span className="ml-2">{curriculum.title}</span>
+              <span className="ml-2 text-xs text-gray-600">({curriculum.units}u)</span>
+            </div>
+          </div>
+          <div className="text-xs text-gray-600 italic">No subject match found yet</div>
+        </div>
+
+        {!isFinalized && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <Button 
+                size="sm" 
+                variant="ghost" 
+                className="text-green-600 hover:bg-green-50 h-7 text-xs"
+                onClick={handleApprove}
+                disabled={actioning || !selectedTor}
+              >
+                <CheckCircle2 className="w-3 h-3 mr-1" />
+                Approve
+              </Button>
+              <Button 
+                size="sm" 
+                variant="ghost" 
+                className="text-red-600 hover:bg-red-50 h-7 text-xs"
+                onClick={handleNotApplicable}
+                disabled={actioning}
+              >
+                <XCircle className="w-3 h-3 mr-1" />
+                Not Applicable
+              </Button>
+            </div>
+
+            {/* Dropdown to select TOR subject for this unmatched curriculum (only displays subjects left after matching) */}
+            {torSubjects && torSubjects.length > 0 ? (
+              <select 
+                className="border border-orange-200 px-2 py-1 text-xs bg-orange-50 rounded min-w-[280px]"
+                value={selectedTor}
+                onChange={(e) => setSelectedTor(e.target.value)}
+                disabled={actioning}
+              >
+                <option value="">Select applicant's scanned subject to match...</option>
+                {torSubjects.map(subject => (
+                  <option key={subject.id} value={subject.id}>
+                    {subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="text-[11px] text-gray-500 italic bg-gray-50 px-2 py-1 rounded border border-gray-200">
+                All scanned subjects are already matched
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disabled, curriculum, torSubjects, documents, onOpenTorEvidence }) => {
   const normalize = (val) => (val || '').toString().toUpperCase().replace(/\s|-/g, '');
 
   const parseExtractedSubjects = (doc) => {
@@ -1296,10 +1450,13 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
                 )}
               </div>
               {match.curriculum_subject ? (
-                <div className="text-sm">
-                  <span className="font-semibold">{match.curriculum_subject.code}</span>
-                  <span className="ml-2">{match.curriculum_subject.title}</span>
-                  <span className="ml-2 text-xs text-gray-500">({match.curriculum_subject.units}u)</span>
+                <div className="mb-2 p-2 bg-blue-50 rounded border border-blue-200">
+                  <div className="text-xs font-semibold text-blue-700 mb-1">BSIT Curriculum:</div>
+                  <div className="text-sm">
+                    <span className="font-semibold">{match.curriculum_subject.code}</span>
+                    <span className="ml-2">{match.curriculum_subject.title}</span>
+                    <span className="ml-2 text-xs text-gray-600">({match.curriculum_subject.units}u)</span>
+                  </div>
                 </div>
               ) : (
                 <div className="text-sm text-gray-600">
@@ -1307,9 +1464,14 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
                 </div>
               )}
               {match.tor_subject && (
-                <div className="text-xs text-gray-500 mt-1">
-                  ← TOR: {match.tor_subject.code} - {match.tor_subject.title}
-                  {match.tor_subject.grade ? ` (Grade: ${match.tor_subject.grade})` : ''}
+                <div className="p-2 bg-amber-50 rounded border border-amber-200">
+                  <div className="text-xs font-semibold text-amber-700 mb-1">Applicant's TOR Subject:</div>
+                  <div className="text-xs text-gray-700">
+                    <span className="font-semibold">{match.tor_subject.code}</span>
+                    <span className="ml-2">{match.tor_subject.title}</span>
+                    {match.tor_subject.units ? <span className="ml-2">({match.tor_subject.units}u)</span> : ''}
+                    {match.tor_subject.grade ? <span className="ml-1">[Grade: {match.tor_subject.grade}]</span> : ''}
+                  </div>
                 </div>
               )}
               {match.source === 'tor' && match.tor_subject && (
@@ -1332,8 +1494,12 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
                 </div>
               )}
               {match.work_experience && (
-                <div className="text-xs text-gray-500 mt-1">
-                  ← {match.work_experience.job_title} ({match.work_experience.years}y)
+                <div className="p-2 bg-purple-50 rounded border border-purple-200 mt-2">
+                  <div className="text-xs font-semibold text-purple-700 mb-1">Applicant's Work Experience:</div>
+                  <div className="text-xs text-gray-700">
+                    <span className="font-semibold">{match.work_experience.job_title}</span>
+                    <span className="ml-2">({match.work_experience.years}y)</span>
+                  </div>
                 </div>
               )}
               {match.matching_reason && (
@@ -1349,8 +1515,8 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
               )}
             </div>
             
-            {!disabled && match.status === 'pending' && (
-              <div className="flex flex-col gap-1">
+            {!disabled && match.status === 'pending' && match.curriculum_subject && (
+              <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-2">
                   <Button 
                     size="sm" 
@@ -1374,9 +1540,13 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
                   </Button>
                 </div>
 
-                {/* If unmatched, allow assigning a curriculum subject and approving in one action */}
-                {!match.curriculum_subject && curriculum && curriculum.length > 0 && (
-                  <AssignAndApprove match={match} curriculum={curriculum} onApprove={onApprove} />
+                {/* Dropdown to reassign to different TOR subject if AI matched wrong - only show when there's a BSIT curriculum matched */}
+                {torSubjects && torSubjects.length > 0 && match.curriculum_subject && (
+                  <ReassignTorSubject
+                    match={match}
+                    torSubjects={torSubjects}
+                    onReassign={onApprove}
+                  />
                 )}
               </div>
             )}
@@ -1387,7 +1557,108 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
   );
 };
 
-const AssignAndApprove = ({ match, curriculum, onApprove }) => {
+const ReassignTorSubject = ({ match, torSubjects, onReassign }) => {
+  const [selected, setSelected] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const handleReassign = async () => {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      await subjectMatchApi.override(match.id, { tor_subject_id: selected, note: 'Reassigned to correct TOR subject' });
+      await subjectMatchApi.approve(match.id, 'Approved');
+      onReassign(match.id);
+    } catch (e) {
+      onReassign(match.id);
+    }
+    setBusy(false);
+  };
+
+  // Show only TOR subjects different from the current match
+  const otherSubjects = torSubjects.filter(s => !match.tor_subject || s.id !== match.tor_subject.id);
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <select className="border border-blue-200 px-2 py-1 text-xs min-w-[280px] bg-blue-50" value={selected} onChange={(e) => setSelected(e.target.value)}>
+        <option value="">If AI matched wrong, choose correct TOR subject...</option>
+        {otherSubjects.map(subject => (
+          <option key={subject.id} value={subject.id}>{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]</option>
+        ))}
+      </select>
+      <Button size="sm" onClick={handleReassign} disabled={!selected || busy} className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-7">
+        {busy ? 'Reassigning...' : 'Reassign & Approve'}
+      </Button>
+    </div>
+  );
+};
+
+const ApproveWithTor = ({ match, torSubjects, onApprove }) => {
+  const [selected, setSelected] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const handleApprove = async () => {
+    setBusy(true);
+    try {
+      if (selected) {
+        await subjectMatchApi.override(match.id, { tor_subject_id: selected, note: 'Approved with selected TOR subject' });
+      }
+      await subjectMatchApi.approve(match.id, selected ? 'Approved' : '');
+      onApprove(match.id);
+    } catch (e) {
+      onApprove(match.id);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <select className="border border-green-200 px-2 py-1 text-xs min-w-[280px] bg-green-50" value={selected} onChange={(e) => setSelected(e.target.value)}>
+        <option value="">Select TOR subject to approve...</option>
+        {torSubjects.map(subject => (
+          <option key={subject.id} value={subject.id}>{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]</option>
+        ))}
+      </select>
+      <Button size="sm" onClick={handleApprove} disabled={busy} className="bg-green-600 hover:bg-green-700 text-white text-xs h-7">
+        {busy ? 'Approving...' : 'Approve'}
+      </Button>
+    </div>
+  );
+};
+
+const RejectWithTor = ({ match, torSubjects, onReject }) => {
+  const [selected, setSelected] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const handleReject = async () => {
+    setBusy(true);
+    try {
+      if (selected) {
+        await subjectMatchApi.override(match.id, { tor_subject_id: selected, note: 'Rejected - subject does not match' });
+      }
+      await subjectMatchApi.reject(match.id, selected ? 'Rejected' : '');
+      onReject(match.id);
+    } catch (e) {
+      onReject(match.id);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <select className="border border-red-200 px-2 py-1 text-xs min-w-[280px] bg-red-50" value={selected} onChange={(e) => setSelected(e.target.value)}>
+        <option value="">Select TOR subject to reject...</option>
+        {torSubjects.map(subject => (
+          <option key={subject.id} value={subject.id}>{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]</option>
+        ))}
+      </select>
+      <Button size="sm" onClick={handleReject} disabled={busy} className="bg-red-600 hover:bg-red-700 text-white text-xs h-7">
+        {busy ? 'Rejecting...' : 'Reject'}
+      </Button>
+    </div>
+  );
+};
+
+const AssignAndApprove = ({ match, passedSubjects, onApprove, label = 'Select passed TOR subject' }) => {
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -1395,22 +1666,21 @@ const AssignAndApprove = ({ match, curriculum, onApprove }) => {
     if (!selected) return;
     setBusy(true);
     try {
-      // call override then approve
-      await subjectMatchApi.override(match.id, { curriculum_subject_id: selected, note: 'Assigned by chair' });
-      await subjectMatchApi.approve(match.id, 'Approved after manual assignment');
+      await subjectMatchApi.override(match.id, { tor_subject_id: selected, note: 'Selected from applicant TOR subject list' });
+      await subjectMatchApi.approve(match.id, 'Approved after manual TOR selection');
       onApprove(match.id);
     } catch (e) {
-      // fallback: just call onApprove to refresh
+      onApprove(match.id);
     }
     setBusy(false);
   };
 
   return (
-    <div className="flex items-center gap-2 mt-2">
-      <select className="border px-2 py-1 text-sm" value={selected} onChange={(e) => setSelected(e.target.value)}>
-        <option value="">Assign curriculum subject</option>
-        {curriculum.map(c => (
-          <option key={c.id} value={c.id}>{c.code} - {c.title} ({c.units}u)</option>
+    <div className="flex items-center gap-2 mt-2 flex-wrap">
+      <select className="border px-2 py-1 text-sm min-w-[220px]" value={selected} onChange={(e) => setSelected(e.target.value)}>
+        <option value="">{label}</option>
+        {passedSubjects.map(subject => (
+          <option key={subject.id} value={subject.id}>{subject.code} - {subject.title} ({subject.units}u) {subject.grade ? `[${subject.grade}]` : ''}</option>
         ))}
       </select>
       <Button size="sm" onClick={handleAssign} disabled={!selected || busy} className="text-xs">

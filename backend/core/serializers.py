@@ -170,6 +170,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
     program_id = serializers.UUIDField(write_only=True, required=False)
     work_experiences = WorkExperienceSerializer(many=True, read_only=True)
     documents = ApplicantDocumentSerializer(many=True, read_only=True)
+    tor_subjects = TORSubjectSerializer(many=True, read_only=True)
     
     class Meta:
         model = Application
@@ -178,7 +179,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
             'phone', 'address', 'birth_date',
             'recommended_program', 'recommendation_reasoning',
             'created_at', 'finalized_at', 'evaluator_note',
-            'work_experiences', 'documents'
+            'work_experiences', 'documents', 'tor_subjects'
         ]
         read_only_fields = ['id', 'created_at', 'finalized_at']
 

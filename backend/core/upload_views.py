@@ -10,6 +10,7 @@ import base64
 import uuid
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .models import (
     Application, TORDocument, TORSubject,
@@ -372,6 +373,16 @@ def process_application(request):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+def _match_single_tor_subject(tor_subject, program, curriculum_list):
+    """Match a single TOR subject against the curriculum. Runs in a thread."""
+    tor_data = {
+        'code': tor_subject.code,
+        'title': tor_subject.title,
+        'units': tor_subject.units
+    }
+    return async_to_sync(gemini_service.match_subject)(tor_data, curriculum_list)
+
+
 def run_full_evaluation_sync(application_id):
     """Run full AI evaluation - SYNC version with sync ORM and async_to_sync for Gemini calls"""
     application = Application.objects.get(id=application_id)
@@ -396,7 +407,7 @@ def run_full_evaluation_sync(application_id):
         except Exception as e:
             print(f"Recommendation error: {e}")
     
-    # Step 2: Match TOR subjects to curriculum
+    # Step 2: Match TOR subjects to curriculum (PARALLEL PROCESSING)
     tor_subjects = list(TORSubject.objects.filter(application=application))
     curriculum_qs = CurriculumSubject.objects.filter(program=application.program)
     curriculum_list = list(curriculum_qs.values('id', 'code', 'title', 'description', 'units'))
@@ -405,6 +416,8 @@ def run_full_evaluation_sync(application_id):
     for c in curriculum_list:
         c['id'] = str(c['id'])
     
+    # Filter to only process pending TOR subjects
+    tor_subjects_to_process = []
     for tor_subject in tor_subjects:
         reviewed_match = SubjectMatch.objects.filter(
             application=application,
@@ -413,39 +426,57 @@ def run_full_evaluation_sync(application_id):
         ).first()
         if reviewed_match:
             continue
-
+        
+        # Delete pending matches to reprocess
         SubjectMatch.objects.filter(
             application=application,
             tor_subject=tor_subject,
             status__in=pending_statuses,
         ).delete()
-
-        tor_data = {
-            'code': tor_subject.code,
-            'title': tor_subject.title,
-            'units': tor_subject.units
+        
+        tor_subjects_to_process.append(tor_subject)
+    
+    # Process TOR subjects in parallel (max 5 concurrent threads)
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {
+            executor.submit(_match_single_tor_subject, tor_subject, application.program, curriculum_list): tor_subject
+            for tor_subject in tor_subjects_to_process
         }
         
-        try:
-            matches = async_to_sync(gemini_service.match_subject)(tor_data, curriculum_list)
-            
-            if matches and len(matches) > 0:
-                best_match = matches[0]
-                curriculum_subj = CurriculumSubject.objects.filter(
-                    code=best_match['curriculum_code'],
-                    program=application.program
-                ).first()
+        for future in as_completed(futures):
+            tor_subject = futures[future]
+            try:
+                matches = future.result()
                 
-                SubjectMatch.objects.create(
-                    application=application,
-                    tor_subject=tor_subject,
-                    curriculum_subject=curriculum_subj,
-                    source='tor',
-                    confidence=float(best_match.get('confidence', 0)),
-                    matching_reason=best_match.get('reasoning', ''),
-                    status='pending'
-                )
-            else:
+                if matches and len(matches) > 0:
+                    best_match = matches[0]
+                    curriculum_subj = CurriculumSubject.objects.filter(
+                        code=best_match['curriculum_code'],
+                        program=application.program
+                    ).first()
+                    
+                    SubjectMatch.objects.create(
+                        application=application,
+                        tor_subject=tor_subject,
+                        curriculum_subject=curriculum_subj,
+                        source='tor',
+                        confidence=float(best_match.get('confidence', 0)),
+                        matching_reason=best_match.get('reasoning', ''),
+                        status='pending'
+                    )
+                else:
+                    SubjectMatch.objects.create(
+                        application=application,
+                        tor_subject=tor_subject,
+                        curriculum_subject=None,
+                        source='tor',
+                        confidence=0,
+                        status='pending',
+                        matching_reason='No matching curriculum subject found'
+                    )
+            except Exception as e:
+                print(f"TOR matching error for {tor_subject.code}: {e}")
+                # Create unmatched entry on error
                 SubjectMatch.objects.create(
                     application=application,
                     tor_subject=tor_subject,
@@ -453,10 +484,8 @@ def run_full_evaluation_sync(application_id):
                     source='tor',
                     confidence=0,
                     status='pending',
-                    matching_reason='No matching curriculum subject found'
+                    matching_reason=f'Error: {str(e)}'
                 )
-        except Exception as e:
-            print(f"TOR matching error for {tor_subject.code}: {e}")
     
     # Step 3: Match work experience to curriculum
     for work_exp in work_exp_objects:

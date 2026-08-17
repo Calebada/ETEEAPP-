@@ -83,6 +83,29 @@ def _clean_json_response(text):
     return text.strip()
 
 
+def clean_ocr_subject_title(title):
+    """Clean and normalize OCR-extracted subject titles (fixing glued words, OCR letter swaps, spacing)"""
+    if not title:
+        return ''
+    t = title.strip()
+    # Split concatenated words with conjunctions (e.g., 'GrammarandComposition' -> 'Grammar and Composition')
+    t = re.sub(r'([a-zA-Z]{3,})(and|with|for|of)([A-Z][a-zA-Z]+)', r'\1 \2 \3', t)
+    # Insert space between lowercase and uppercase letters (e.g., 'andServicing' -> 'and Servicing', 'ServiceTraining' -> 'Service Training')
+    t = re.sub(r'([a-z])([A-Z])', r'\1 \2', t)
+    # Insert space around parentheses (e.g., 'Electronics(Lab)' -> 'Electronics (Lab)')
+    t = re.sub(r'([a-zA-Z0-9])\(', r'\1 (', t)
+    t = re.sub(r'\)([a-zA-Z0-9])', r') \1', t)
+    # Insert space between letters and numbers (e.g., 'Science1' -> 'Science 1')
+    t = re.sub(r'([a-zA-Z])(\d+)', r'\1 \2', t)
+    t = re.sub(r'(\d+)([a-zA-Z])', r'\1 \2', t)
+    # Fix common OCR character confusion for Roman numerals / numbers at word end (e.g. 'Programl' -> 'Program 1', 'Doctrinel' -> 'Doctrine 1')
+    t = re.sub(r'\b(Program|Course|Part|Sem|Level|Safety|Doctrine|Activities|Arts|Training|Mathematics|Programming|Physics|Chemistry|Science|English|PE|PATHFit|NSTP|Electronics)[lI1]\b', r'\1 1', t, flags=re.IGNORECASE)
+    t = re.sub(r'\b(Program|Course|Part|Sem|Level|Safety|Doctrine|Activities|Arts|Training|Mathematics|Programming|Physics|Chemistry|Science|English|PE|PATHFit|NSTP|Electronics)(?:ll|II|2)\b', r'\1 2', t, flags=re.IGNORECASE)
+    # Normalize whitespace
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+
 def _decode_document_bytes(image_base64):
     if isinstance(image_base64, bytes):
         return image_base64
@@ -435,7 +458,7 @@ class GeminiService:
         loop = asyncio.get_event_loop()
 
         def _sync_call():
-            models_to_try = [GEMINI_MODEL, 'gemini-pro-latest', 'gemini-2.5-flash', 'gemini-1.5-flash']
+            models_to_try = [GEMINI_MODEL, 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
             if client:
                 config = None
                 if system_instruction and types:
@@ -587,18 +610,22 @@ Rules:
         try:
             def _local_match_subjects():
                 matches = []
+                raw_title = tor_subject_data.get('title') or ''
+                cleaned_title = clean_ocr_subject_title(raw_title)
+                
                 tor_code = (tor_subject_data.get('code') or '').upper().replace(' ', '').replace('-', '')
-                tor_title = (tor_subject_data.get('title') or '').lower()
+                tor_title = cleaned_title.lower().strip()
+                tor_compact = re.sub(r'[^a-z0-9]+', '', tor_title)
                 stopwords = {
-                    'and', 'for', 'the', 'with', 'from', 'into', 'that', 'this', 'of', 'in', 'on', 'to', 'a', 'an',
-                    'it', 'ii', 'iii', 'iv', 'v', '1', '2', '3', '4', '5', 'semester', 'course', 'courses', 'subject',
-                    'subjects', 'fundamentals', 'introduction', 'intro', 'basic', 'basics'
+                    'and', 'for', 'the', 'with', 'from', 'into', 'that', 'this',
+                    'of', 'in', 'on', 'to', 'a', 'an', 'semester', 'course',
+                    'courses', 'subject', 'subjects', 'general', 'education', 'elective',
                 }
 
                 def _meaningful_tokens(text):
                     tokens = set()
-                    for token in re.findall(r"\w+", text.lower()):
-                        if len(token) < 3 or token.isdigit() or token in stopwords:
+                    for token in re.findall(r"[a-z0-9]+", (text or '').lower()):
+                        if len(token) < 2 or token in stopwords:
                             continue
                         tokens.add(token)
                     return tokens
@@ -606,79 +633,156 @@ Rules:
                 tor_tokens = _meaningful_tokens(tor_title)
 
                 synonym_groups = [
-                    {'programming', 'coding', 'development', 'software'},
-                    {'computer', 'computing', 'it', 'information', 'technology'},
-                    {'database', 'databases', 'dbms'},
-                    {'network', 'networks', 'networking'},
-                    {'analysis', 'design', 'system', 'systems'},
-                    {'web', 'internet', 'frontend', 'backend', 'application', 'applications'},
-                    {'security', 'cybersecurity', 'safety'},
-                    {'multimedia', 'graphics', 'animation', 'media'},
-                    {'management', 'project', 'capstone', 'research'},
+                    {'programming', 'coding', 'development', 'software', 'programmer', 'structured'},
+                    {'computer', 'computing', 'it', 'information', 'technology', 'pc'},
+                    {'database', 'databases', 'dbms', 'sql', 'relational'},
+                    {'network', 'networks', 'networking', 'telecommunications', 'telecom', 'cisco'},
+                    {'analysis', 'design', 'system', 'systems', 'architecture', 'integration'},
+                    {'web', 'internet', 'frontend', 'backend', 'fullstack', 'website'},
+                    {'security', 'cybersecurity', 'assurance', 'infosec', 'safety'},
+                    {'multimedia', 'graphics', 'animation', 'media', 'digital'},
+                    {'management', 'project', 'capstone', 'research', 'thesis'},
+                    {'discrete', 'structures', 'mathematics', 'math', 'algebra', 'calculus'},
+                    {'human', 'interaction', 'ui', 'ux', 'interface', 'usability'},
+                    {'mobile', 'android', 'ios', 'apps', 'application', 'applications'},
+                    {'hardware', 'troubleshooting', 'maintenance', 'pc', 'servicing', 'electronics'},
+                    {'purposive', 'communication', 'english', 'speech', 'oral', 'writing', 'grammar', 'composition'},
+                    {'history', 'philippine', 'readings', 'government', 'society', 'social', 'science'},
+                    {'nstp', 'cwts', 'rotc', 'national', 'service', 'training'},
+                    {'pe', 'pathfit', 'physical', 'fitness', 'sports', 'movement', 'exercise', 'activities'},
                 ]
+
+                # Academic equivalence rules mapping common TOR titles to curriculum codes
+                academic_equiv = [
+                    (['CSIT121'], ['computer programming 1', 'fundamentals of programming', 'programming 1', 'logic formulation', 'computer programming i', 'intro to programming', 'structured programming', 'introductory programming', 'c programming', 'c++ programming 1', 'turbo c']),
+                    (['CSIT201', 'CSIT221'], ['computer programming 2', 'intermediate programming', 'object-oriented programming', 'object oriented programming', 'programming 2', 'oop', 'java programming', 'c++ programming', 'computer programming ii', 'object-oriented analysis and design', 'advanced programming']),
+                    (['CSIT122'], ['discrete structures', 'discrete mathematics', 'discrete structures 1', 'discrete math', 'discrete structures i', 'combinatorics', 'graph theory']),
+                    (['CSIT111'], ['introduction to computing', 'intro to computing', 'computer fundamentals', 'introduction to computer studies', 'intro to computer science', 'it fundamentals', 'intro to it', 'introduction to it', 'pc operations', 'computer literacy', 'living in the it era', 'information technology concepts']),
+                    (['CSIT112'], ['introduction to computer systems', 'pc hardware', 'hardware and troubleshooting', 'computer systems', 'computer architecture', 'computer hardware', 'pc hardware and troubleshooting', 'computer hardware and servicing', 'computer system servicing', 'hardware servicing', 'digital electronics', 'electronics (lab)', 'electronics (lec)', 'electronics lab', 'electronics lec', 'electronics']),
+                    (['CSIT226'], ['database management systems', 'database management', 'database systems', 'fundamentals of database', 'information management 1', 'information management', 'dbms', 'intro to database', 'relational database', 'database concepts', 'sql fundamentals', 'data management']),
+                    (['CSIT327'], ['advanced database', 'information management 2', 'advanced dbms', 'database administration', 'data warehousing', 'nosql databases', 'big data']),
+                    (['CSIT227'], ['data structures and algorithms', 'data structures', 'algorithms and data structures', 'data structures and algorithm analysis', 'data structure and algorithms', 'design and analysis of algorithms']),
+                    (['CSIT238'], ['web development', 'web systems and technologies', 'web design', 'web development fundamentals', 'advanced web design', 'internet programming', 'web programming', 'web technologies', 'web applications', 'web development 1', 'web development 2', 'platform-based development 2 (web)', 'basic internet', 'internet concepts', 'web page design', 'html and css']),
+                    (['CSIT213'], ['platform-based development 1 (multimedia)', 'multimedia systems', 'multimedia technologies', 'digital media', 'computer graphics', 'multimedia and animation', 'multimedia arts', 'audio video production']),
+                    (['CSIT284'], ['human computer interaction', 'human-computer interaction', 'hci', 'ui/ux design', 'user interface design', 'user experience design', 'ui design', 'ux design', 'interaction design', 'usability engineering']),
+                    (['IT227'], ['networking 1', 'networking fundamentals', 'computer networks', 'data communications and networking', 'network fundamentals', 'cisco 1', 'ccna 1', 'intro to networking', 'networking i', 'data communications', 'telecommunications']),
+                    (['IT228'], ['networking 2', 'routing and switching', 'advanced networking', 'cisco 2', 'ccna 2', 'networking ii', 'network administration', 'wan technologies', 'cisco 3', 'cisco 4']),
+                    (['IT332'], ['information assurance and security 1', 'information security', 'cybersecurity', 'information assurance', 'principles of information security', 'fundamentals of cybersecurity', 'infosec', 'network security', 'general and industrial safety 1', 'industrial safety', 'it safety and security']),
+                    (['IT344'], ['systems integration and architecture 1', 'systems analysis and design', 'system analysis and design', 'enterprise architecture', 'systems integration', 'software design', 'sad']),
+                    (['IT346'], ['systems administration and maintenance', 'system administration', 'server administration', 'network and systems administration', 'linux administration', 'windows server']),
+                    (['CSIT321', 'CSITELEC1'], ['applications development and emerging technologies', 'mobile application development', 'mobile development', 'android development', 'ios development', 'mobile programming', 'app development', 'cross-platform mobile development']),
+                    (['IT365'], ['project management for it', 'it project management', 'software engineering', 'software engineering 1', 'software project management', 'it quality assurance']),
+                    (['IT342'], ['capstone and research 1', 'capstone project 1', 'capstone 1', 'undergraduate thesis 1', 'methods of research', 'it research', 'research methodology']),
+                    (['IT411'], ['capstone and research 2', 'capstone project 2', 'capstone 2', 'undergraduate thesis 2', 'thesis defense']),
+                    (['IT412'], ['ojt/practicum', 'practicum', 'on-the-job training', 'ojt', 'internship', 'industry practicum', 'supervised industrial training']),
+                    (['ENGL031'], ['purposive communication', 'communication arts', 'english 1', 'english 2', 'oral communication', 'speech communication', 'technical writing', 'grammar and composition', 'study and thinking skills', 'business communication', 'writing in the discipline', 'college english']),
+                    (['MATH031'], ['mathematics in the modern world', 'college algebra', 'general mathematics', 'advance algebra', 'trigonometry', 'elementary statistics', 'contemporary mathematics', 'differential calculus', 'integral calculus', 'basic calculus', 'applied mathematics', 'business mathematics']),
+                    (['SOCSCI031'], ['readings in philippine history', 'philippine history', 'philippine history and government', 'philippine government and constitution', 'social science 1', 'social science 2', 'society and culture', 'general sociology', 'philippine governance', 'politics and governance']),
+                    (['PSYCH031'], ['understanding the self', 'general psychology', 'intro to psychology', 'personality development', 'human behavior']),
+                    (['RIZAL031'], ['the life and works of rizal', 'life and works of rizal', 'rizal course', 'rizal', 'rizals life and works']),
+                    (['PHILO031'], ['ethics', 'moral philosophy', 'professional ethics', 'ethics in it', 'basic christian doctrine 1', 'christian doctrine', 'religious education', 'values education', 'logic and critical thinking', 'philosophy of man']),
+                    (['STS031'], ['science, technology and society', 'science technology and society', 'sts', 'environmental science', 'general science', 'earth science', 'ecology']),
+                    (['NSTP111'], ['national service training program 1', 'nstp 1', 'cwts 1', 'rotc 1', 'nstp i', 'civic welfare training service 1', 'military science 1']),
+                    (['NSTP112'], ['national service training program 2', 'nstp 2', 'cwts 2', 'rotc 2', 'nstp ii', 'civic welfare training service 2', 'military science 2']),
+                    (['PE103'], ['pathfit 1', 'physical education 1', 'pe 1', 'physical fitness', 'pe i', 'self testing activities', 'physical fitness and gymnastics', 'movement competency']),
+                    (['PE104'], ['pathfit 2', 'physical education 2', 'pe 2', 'rhythmic activities', 'pe ii', 'fitness and dance']),
+                    (['PE205'], ['pathfit 3', 'physical education 3', 'pe 3', 'individual and dual sports', 'pe iii', 'swimming', 'badminton', 'table tennis']),
+                    (['PE206'], ['pathfit 4', 'physical education 4', 'pe 4', 'team sports', 'pe iv', 'basketball', 'volleyball']),
+                    (['CSIT385'], ['data analytics', 'data analytics 1', 'data analysis', 'business analytics', 'data science fundamentals', 'data mining']),
+                    (['IT334'], ['is strategy, management, and acquisition', 'information systems management', 'it governance', 'strategic information systems']),
+                    (['IT317'], ['technopreneurship', 'entrepreneurship', 'techno entrepreneurship', 'business planning', 'principles of management']),
+                    (['CSIT212'], ['quantitative methods', 'statistics', 'probability and statistics', 'biostatistics', 'operations research', 'quantitative techniques']),
+                ]
+
+                # Build lookup: curriculum code -> list of equivalent TOR titles
+                equiv_by_code = {}
+                for targets, keywords in academic_equiv:
+                    for code in targets:
+                        normalized_code = code.upper().replace(' ', '').replace('-', '')
+                        equiv_by_code.setdefault(normalized_code, []).extend(keywords)
+
+                def _compact(text):
+                    return re.sub(r'[^a-z0-9]+', '', (text or '').lower())
 
                 def _token_similarity(a_tokens, b_tokens):
                     if not a_tokens or not b_tokens:
                         return 0.0
                     inter = a_tokens.intersection(b_tokens)
-                    if not inter:
-                        return 0.0
                     base = len(inter) / max(1, min(len(a_tokens), len(b_tokens)))
                     bonus = 0.0
                     for group in synonym_groups:
-                        if len(group.intersection(a_tokens)) and len(group.intersection(b_tokens)):
-                            bonus += 0.15
+                        if group.intersection(a_tokens) and group.intersection(b_tokens):
+                            bonus += 0.2
                     return min(1.0, base + bonus)
-
-                def _compact(text):
-                    return re.sub(r'[^a-z0-9]+', '', (text or '').lower())
-
-                def _compact_similarity(a_text, b_text):
-                    a = _compact(a_text)
-                    b = _compact(b_text)
-                    if not a or not b:
-                        return 0.0
-                    if a == b:
-                        return 1.0
-                    if a in b or b in a:
-                        return 0.95
-                    return SequenceMatcher(None, a, b).ratio()
 
                 for s in curriculum_subjects:
                     ccode = (s.get('code') or '').upper().replace(' ', '').replace('-', '')
-                    ctitle = (s.get('title') or '').lower()
-                    cdesc = (s.get('description') or '').lower()
+                    ctitle = (s.get('title') or '').lower().strip()
+                    cdesc = (s.get('description') or '').lower().strip()
+                    c_compact = _compact(ctitle)
                     cur_tokens = _meaningful_tokens(f"{ctitle} {cdesc}")
 
-                    if tor_code and ccode and (tor_code == ccode or tor_code in ccode or ccode in tor_code):
+                    # 1. Exact code match
+                    exact_code = bool(tor_code and ccode and tor_code == ccode)
+                    # 2. Exact title match
+                    exact_title = bool(tor_title and ctitle and (
+                        tor_title == ctitle or
+                        tor_compact == c_compact
+                    ))
+
+                    if exact_code or exact_title:
                         matches.append({
                             'curriculum_code': s['code'],
-                            'confidence': 96,
-                            'reasoning': 'Exact or prefix code match'
+                            'confidence': 98 if exact_code else 95,
+                            'reasoning': f"Exact match: '{raw_title}' = '{s['title']}'"
                         })
                         continue
 
-                    similarity = _token_similarity(tor_tokens, cur_tokens)
-                    compact_similarity = _compact_similarity(tor_title, ctitle)
-                    similarity = max(similarity, compact_similarity)
-                    confidence = int(similarity * 100)
+                    # 3. Knowledge-based academic equivalence
+                    equiv_keywords = equiv_by_code.get(ccode, [])
+                    rule_matched = False
+                    for kw in equiv_keywords:
+                        kw_compact = _compact(kw)
+                        if (kw in tor_title or tor_title in kw or
+                                (kw_compact and (kw_compact in tor_compact or tor_compact in kw_compact))):
+                            matches.append({
+                                'curriculum_code': s['code'],
+                                'confidence': 92,
+                                'reasoning': f"Equivalent academic competency: '{raw_title}' covers same topics as '{s['title']}'"
+                            })
+                            rule_matched = True
+                            break
+                    if rule_matched:
+                        continue
 
-                    semantic_boost_terms = ['computer', 'programming', 'database', 'network', 'web', 'software', 'system', 'analysis']
-                    if any(term in tor_title for term in semantic_boost_terms) and any(term in ctitle or term in cdesc for term in semantic_boost_terms):
-                        confidence += 5
+                    # 4. Fuzzy title & semantic similarity
+                    token_sim = _token_similarity(tor_tokens, cur_tokens)
+                    compact_ratio = SequenceMatcher(None, tor_compact, c_compact).ratio() if tor_compact and c_compact else 0.0
+                    is_sub = bool(tor_title and ctitle and (
+                        tor_title in ctitle or ctitle in tor_title or
+                        tor_compact in c_compact or c_compact in tor_compact
+                    ))
+                    score = max(token_sim, compact_ratio)
+                    if is_sub:
+                        score = max(score, 0.85)
 
-                    if confidence >= 15:
-                        reason = 'Title/description similarity with curriculum'
-                        if compact_similarity >= 0.85:
-                            reason = 'High normalized title similarity (spacing-insensitive OCR-safe match)'
+                    if score >= 0.70:
+                        conf = int(min(90, max(70, score * 95)))
                         matches.append({
                             'curriculum_code': s['code'],
-                            'confidence': min(max(confidence, 15), 99),
-                            'reasoning': reason
+                            'confidence': conf,
+                            'reasoning': f"Strong topic overlap between '{raw_title}' and '{s['title']}'"
                         })
 
+                # Deduplicate by curriculum code, keep highest confidence
+                seen = set()
+                deduped = []
                 matches.sort(key=lambda x: x['confidence'], reverse=True)
-                return matches
+                for m in matches:
+                    if m['curriculum_code'] not in seen:
+                        seen.add(m['curriculum_code'])
+                        deduped.append(m)
+                return deduped[:5]
 
             local_matches = _local_match_subjects()
 
@@ -687,7 +791,14 @@ Rules:
                 for s in curriculum_subjects
             ])
             
-            prompt = f"""Compare this TOR subject against the curriculum subjects and find the best match.
+            prompt = f"""You are evaluating an applicant's Transcript of Records (TOR) subject for ETEEAP academic credit.
+Match this TOR subject against the BSIT curriculum subjects below.
+
+MATCHING CRITERIA (in priority order):
+1. Exact code or title match → highest confidence (95-98%)
+2. Equivalent academic competency (e.g. "Structured Programming" / "Computer Programming 1" = "Fundamentals of Programming", "Database Management Systems" = "Information Management 1", "Discrete Mathematics" = "Discrete Structures 1", "PC Operations" = "Introduction to Computing", "Computer Hardware & Servicing" = "Introduction to Computer Systems", "College Algebra" = "Mathematics in the Modern World", "Grammar & Composition" = "Purposive Communication") → high confidence (85-94%)
+3. Strong topic overlap where the TOR subject clearly covers the same learning outcomes → moderate confidence (70-84%)
+4. If no reasonable academic equivalence exists, return an empty array []
 
 TOR Subject:
 Code: {tor_subject_data['code']}
@@ -697,12 +808,12 @@ Units: {tor_subject_data['units']}
 Curriculum Subjects:
 {curriculum_list}
 
-Return ONLY a valid JSON array of matches with confidence >= 40, sorted by confidence:
-[{{"curriculum_code": "IT111", "confidence": 95, "reasoning": "..."}}]
+Return ONLY a valid JSON array of matches sorted by confidence (best first). Include at most 3 matches:
+[{{"curriculum_code": "CSIT121", "confidence": 92, "reasoning": "Equivalent academic competency: both cover introductory programming"}}]
 
-Just the JSON array, no explanations."""
+If no reasonable match exists, return [] only."""
 
-            system_instruction = "You are an expert at academic credit evaluation and subject matching."
+            system_instruction = "You are an expert ETEEAP academic credit evaluator at CIT-University. Match subjects based on equivalent academic competencies, not just identical names. Different universities and vocational schools use different course codes and titles for equivalent subjects."
             response_text = await self._generate(prompt, system_instruction=system_instruction)
             if response_text:
                 cleaned = _clean_json_response(response_text)
