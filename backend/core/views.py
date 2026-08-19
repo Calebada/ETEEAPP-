@@ -575,6 +575,34 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
         match.save()
         return Response(SubjectMatchSerializer(match).data)
     
+    def create(self, request, *args, **kwargs):
+        if request.user.role not in ['evaluator', 'admin']:
+            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        
+        application_id = request.data.get('application_id')
+        curriculum_subject_id = request.data.get('curriculum_subject_id')
+        tor_subject_id = request.data.get('tor_subject_id')
+        work_experience_id = request.data.get('work_experience_id')
+        note = request.data.get('note', '')
+        
+        if not application_id or not curriculum_subject_id:
+            return Response({'error': 'application_id and curriculum_subject_id are required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        source = 'work_experience' if work_experience_id else 'tor'
+        match, created = SubjectMatch.objects.update_or_create(
+            application_id=application_id,
+            curriculum_subject_id=curriculum_subject_id,
+            defaults={
+                'tor_subject_id': tor_subject_id if source == 'tor' else None,
+                'work_experience_id': work_experience_id if source == 'work_experience' else None,
+                'source': source,
+                'confidence': 100.0,
+                'status': 'approved',
+                'evaluator_note': note or 'Manually matched and approved by evaluator'
+            }
+        )
+        return Response(SubjectMatchSerializer(match).data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
     @action(detail=True, methods=['post'])
     def override(self, request, pk=None):
         if request.user.role not in ['evaluator', 'admin']:
@@ -583,11 +611,18 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
         match = self.get_object()
         new_curriculum_id = request.data.get('curriculum_subject_id')
         new_tor_subject_id = request.data.get('tor_subject_id')
+        new_work_experience_id = request.data.get('work_experience_id')
 
         if new_curriculum_id:
             match.curriculum_subject_id = new_curriculum_id
-        if new_tor_subject_id:
+        if new_work_experience_id:
+            match.work_experience_id = new_work_experience_id
+            match.tor_subject = None
+            match.source = 'work_experience'
+        elif new_tor_subject_id:
             match.tor_subject_id = new_tor_subject_id
+            match.work_experience = None
+            match.source = 'tor'
 
         match.status = 'overridden'
         match.evaluator_note = request.data.get('note', '')

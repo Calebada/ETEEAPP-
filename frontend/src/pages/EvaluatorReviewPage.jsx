@@ -823,6 +823,7 @@ export const EvaluatorReviewPage = () => {
                       documents={application?.documents || []}
                       onOpenTorEvidence={setTorEvidenceMatch}
                       torSubjects={application?.tor_subjects || []}
+                      workExperiences={application?.work_experiences || []}
                     />
                   </TabsContent>
                   <TabsContent value="tor">
@@ -836,6 +837,7 @@ export const EvaluatorReviewPage = () => {
                       documents={application?.documents || []}
                       onOpenTorEvidence={setTorEvidenceMatch}
                       torSubjects={application?.tor_subjects || []}
+                      workExperiences={application?.work_experiences || []}
                     />
                   </TabsContent>
                   <TabsContent value="work">
@@ -849,6 +851,7 @@ export const EvaluatorReviewPage = () => {
                       documents={application?.documents || []}
                       onOpenTorEvidence={setTorEvidenceMatch}
                       torSubjects={application?.tor_subjects || []}
+                      workExperiences={application?.work_experiences || []}
                     />
                   </TabsContent>
                 </div>
@@ -859,7 +862,7 @@ export const EvaluatorReviewPage = () => {
             {unmatchedCurriculum.length > 0 && (
               <Card className="p-5 border-orange-200 bg-orange-50">
                 <h3 className="font-serif font-semibold mb-3 text-orange-900">Unmatched BSIT Curriculum ({unmatchedCurriculum.length})</h3>
-                <p className="text-xs text-orange-700 mb-4">These BSIT subjects have no match yet. Select an applicant's scanned subject to match or mark as not applicable.</p>
+                <p className="text-xs text-orange-700 mb-4">These BSIT subjects have no match yet. Select an applicant's scanned subject or work experience to match or mark as not applicable.</p>
                 
                 <div className="space-y-3 max-h-96 overflow-y-auto">
                   {unmatchedCurriculum.map((curSubject) => (
@@ -867,6 +870,8 @@ export const EvaluatorReviewPage = () => {
                       key={curSubject.id}
                       curriculum={curSubject}
                       torSubjects={availableTorSubjects}
+                      workExperiences={application?.work_experiences || []}
+                      applicationId={application?.id}
                       matches={matches}
                       onMatched={loadData}
                       isFinalized={isFinalized}
@@ -1242,27 +1247,41 @@ export const EvaluatorReviewPage = () => {
   );
 };
 
-const UnmatchedCurriculumItem = ({ curriculum, torSubjects, matches, onMatched, isFinalized }) => {
-  const [selectedTor, setSelectedTor] = useState('');
+const UnmatchedCurriculumItem = ({ curriculum, torSubjects, workExperiences, applicationId, matches, onMatched, isFinalized }) => {
+  const [selectedSource, setSelectedSource] = useState('');
   const [actioning, setActioning] = useState(false);
 
   const handleApprove = async () => {
-    if (!selectedTor) {
-      toast.info("Please select an applicant's subject first");
+    if (!selectedSource) {
+      toast.info("Please select an applicant's subject or work experience first");
       return;
     }
     setActioning(true);
     try {
-      const existingMatch = (matches || []).find(m => m.tor_subject?.id === selectedTor);
+      const isWork = selectedSource.startsWith('work:');
+      const sourceId = selectedSource.replace(/^(tor|work):/, '');
+
+      const existingMatch = (matches || []).find(m => 
+        isWork ? m.work_experience?.id === sourceId : m.tor_subject?.id === sourceId
+      );
+
       if (existingMatch) {
         await subjectMatchApi.override(existingMatch.id, {
           curriculum_subject_id: curriculum.id,
-          note: 'Manually assigned by evaluator from unmatched curriculum'
+          note: isWork ? 'Manually assigned from work experience' : 'Manually assigned from unmatched curriculum'
         });
         await subjectMatchApi.approve(existingMatch.id, 'Approved');
+      } else if (applicationId) {
+        await subjectMatchApi.create({
+          application_id: applicationId,
+          curriculum_subject_id: curriculum.id,
+          tor_subject_id: !isWork ? sourceId : undefined,
+          work_experience_id: isWork ? sourceId : undefined,
+          note: isWork ? 'Manually credited from work experience' : 'Manually credited from TOR'
+        });
       }
-      toast.success(`"${curriculum.code}" approved with selected TOR subject`);
-      setSelectedTor('');
+      toast.success(`"${curriculum.code}" approved with selected ${isWork ? 'Work Experience' : 'TOR Subject'}`);
+      setSelectedSource('');
       if (onMatched) {
         onMatched();
       }
@@ -1275,8 +1294,11 @@ const UnmatchedCurriculumItem = ({ curriculum, torSubjects, matches, onMatched, 
 
   const handleNotApplicable = () => {
     toast.info(`"${curriculum.code}" marked as not applicable for this applicant`);
-    setSelectedTor('');
+    setSelectedSource('');
   };
+
+  const hasTor = torSubjects && torSubjects.length > 0;
+  const hasWork = workExperiences && workExperiences.length > 0;
 
   return (
     <div className="border border-orange-200 rounded-lg p-3 bg-white">
@@ -1301,7 +1323,7 @@ const UnmatchedCurriculumItem = ({ curriculum, torSubjects, matches, onMatched, 
                 variant="ghost" 
                 className="text-green-600 hover:bg-green-50 h-7 text-xs"
                 onClick={handleApprove}
-                disabled={actioning || !selectedTor}
+                disabled={actioning || !selectedSource}
               >
                 <CheckCircle2 className="w-3 h-3 mr-1" />
                 Approve
@@ -1318,24 +1340,41 @@ const UnmatchedCurriculumItem = ({ curriculum, torSubjects, matches, onMatched, 
               </Button>
             </div>
 
-            {/* Dropdown to select TOR subject for this unmatched curriculum (only displays subjects left after matching) */}
-            {torSubjects && torSubjects.length > 0 ? (
+            {/* Dropdown to select TOR subject or Work Experience */}
+            {hasTor || hasWork ? (
               <select 
-                className="border border-orange-200 px-2 py-1 text-xs bg-orange-50 rounded min-w-[280px]"
-                value={selectedTor}
-                onChange={(e) => setSelectedTor(e.target.value)}
+                className="border border-orange-200 px-2 py-1 text-xs bg-orange-50 rounded min-w-[290px]"
+                value={selectedSource}
+                onChange={(e) => setSelectedSource(e.target.value)}
                 disabled={actioning}
               >
-                <option value="">Select applicant's scanned subject to match...</option>
-                {torSubjects.map(subject => (
-                  <option key={subject.id} value={subject.id}>
-                    {subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]
-                  </option>
-                ))}
+                <option value="">Select scanned subject or work experience...</option>
+                {hasTor && (
+                  <optgroup label="📜 Available TOR Subjects">
+                    {torSubjects.map(subject => (
+                      <option key={subject.id} value={`tor:${subject.id}`}>
+                        {subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {hasWork && (
+                  <optgroup label="💼 Applicant Work Experience (Work Crediting)" style={{ color: '#7e22ce', fontWeight: 'bold' }}>
+                    {workExperiences.map(work => (
+                      <option 
+                        key={work.id} 
+                        value={`work:${work.id}`}
+                        style={{ color: '#7e22ce', backgroundColor: '#f3e8ff', fontWeight: '600' }}
+                      >
+                        💼 [Work] {work.job_title} - {work.company_name} ({work.years} yrs)
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             ) : (
               <div className="text-[11px] text-gray-500 italic bg-gray-50 px-2 py-1 rounded border border-gray-200">
-                All scanned subjects are already matched
+                All scanned subjects & work experiences are matched
               </div>
             )}
           </div>
@@ -1345,7 +1384,7 @@ const UnmatchedCurriculumItem = ({ curriculum, torSubjects, matches, onMatched, 
   );
 };
 
-const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disabled, curriculum, torSubjects, documents, onOpenTorEvidence }) => {
+const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disabled, curriculum, torSubjects, workExperiences, documents, onOpenTorEvidence }) => {
   const normalize = (val) => (val || '').toString().toUpperCase().replace(/\s|-/g, '');
 
   const parseExtractedSubjects = (doc) => {
@@ -1434,7 +1473,7 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
                   {match.source === 'tor' ? (
                     <><FileText className="w-3 h-3 mr-1" /> TOR</>
                   ) : (
-                    <><Briefcase className="w-3 h-3 mr-1" /> Work</>
+                    <><Briefcase className="w-3 h-3 mr-1 text-purple-600" /> Work</>
                   )}
                 </Badge>
                 {match.flagged_by_applicant && (
@@ -1496,9 +1535,10 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
               {match.work_experience && (
                 <div className="p-2 bg-purple-50 rounded border border-purple-200 mt-2">
                   <div className="text-xs font-semibold text-purple-700 mb-1">Applicant's Work Experience:</div>
-                  <div className="text-xs text-gray-700">
+                  <div className="text-xs text-purple-900 font-medium">
                     <span className="font-semibold">{match.work_experience.job_title}</span>
-                    <span className="ml-2">({match.work_experience.years}y)</span>
+                    {match.work_experience.company_name && <span className="ml-2 text-purple-700">at {match.work_experience.company_name}</span>}
+                    <span className="ml-2 text-purple-600">({match.work_experience.years}y)</span>
                   </div>
                 </div>
               )}
@@ -1540,11 +1580,12 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
                   </Button>
                 </div>
 
-                {/* Dropdown to reassign to different TOR subject if AI matched wrong - only show when there's a BSIT curriculum matched */}
-                {torSubjects && torSubjects.length > 0 && match.curriculum_subject && (
+                {/* Dropdown to reassign to different TOR subject or Work Experience */}
+                {match.curriculum_subject && ((torSubjects && torSubjects.length > 0) || (workExperiences && workExperiences.length > 0)) && (
                   <ReassignTorSubject
                     match={match}
-                    torSubjects={torSubjects}
+                    torSubjects={torSubjects || []}
+                    workExperiences={workExperiences || []}
                     onReassign={onApprove}
                   />
                 )}
@@ -1557,7 +1598,7 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
   );
 };
 
-const ReassignTorSubject = ({ match, torSubjects, onReassign }) => {
+const ReassignTorSubject = ({ match, torSubjects, workExperiences, onReassign }) => {
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -1565,7 +1606,19 @@ const ReassignTorSubject = ({ match, torSubjects, onReassign }) => {
     if (!selected) return;
     setBusy(true);
     try {
-      await subjectMatchApi.override(match.id, { tor_subject_id: selected, note: 'Reassigned to correct TOR subject' });
+      if (selected.startsWith('work:')) {
+        const workExpId = selected.replace('work:', '');
+        await subjectMatchApi.override(match.id, { 
+          work_experience_id: workExpId, 
+          note: 'Reassigned to applicant work experience' 
+        });
+      } else {
+        const torSubjId = selected.replace('tor:', '');
+        await subjectMatchApi.override(match.id, { 
+          tor_subject_id: torSubjId, 
+          note: 'Reassigned to correct TOR subject' 
+        });
+      }
       await subjectMatchApi.approve(match.id, 'Approved');
       onReassign(match.id);
     } catch (e) {
@@ -1575,15 +1628,41 @@ const ReassignTorSubject = ({ match, torSubjects, onReassign }) => {
   };
 
   // Show only TOR subjects different from the current match
-  const otherSubjects = torSubjects.filter(s => !match.tor_subject || s.id !== match.tor_subject.id);
+  const otherSubjects = (torSubjects || []).filter(s => !match.tor_subject || s.id !== match.tor_subject.id);
+  const otherWorkExperiences = (workExperiences || []).filter(w => !match.work_experience || w.id !== match.work_experience.id);
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
-      <select className="border border-blue-200 px-2 py-1 text-xs min-w-[280px] bg-blue-50" value={selected} onChange={(e) => setSelected(e.target.value)}>
-        <option value="">If AI matched wrong, choose correct TOR subject...</option>
-        {otherSubjects.map(subject => (
-          <option key={subject.id} value={subject.id}>{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]</option>
-        ))}
+      <select 
+        className="border border-blue-200 px-2 py-1 text-xs min-w-[290px] bg-blue-50 rounded" 
+        value={selected} 
+        onChange={(e) => setSelected(e.target.value)}
+      >
+        <option value="">If AI matched wrong, choose correct TOR or Work...</option>
+        
+        {otherSubjects.length > 0 && (
+          <optgroup label="📜 Applicant Scanned TOR Subjects">
+            {otherSubjects.map(subject => (
+              <option key={subject.id} value={`tor:${subject.id}`}>
+                {subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]
+              </option>
+            ))}
+          </optgroup>
+        )}
+
+        {otherWorkExperiences.length > 0 && (
+          <optgroup label="💼 Applicant Work Experience (Work Crediting)" style={{ color: '#7e22ce', fontWeight: 'bold' }}>
+            {otherWorkExperiences.map(work => (
+              <option 
+                key={work.id} 
+                value={`work:${work.id}`}
+                style={{ color: '#7e22ce', backgroundColor: '#f3e8ff', fontWeight: '600' }}
+              >
+                💼 [Work] {work.job_title} - {work.company_name} ({work.years} yrs)
+              </option>
+            ))}
+          </optgroup>
+        )}
       </select>
       <Button size="sm" onClick={handleReassign} disabled={!selected || busy} className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-7">
         {busy ? 'Reassigning...' : 'Reassign & Approve'}
@@ -1592,7 +1671,7 @@ const ReassignTorSubject = ({ match, torSubjects, onReassign }) => {
   );
 };
 
-const ApproveWithTor = ({ match, torSubjects, onApprove }) => {
+const ApproveWithTor = ({ match, torSubjects, workExperiences, onApprove }) => {
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -1600,7 +1679,11 @@ const ApproveWithTor = ({ match, torSubjects, onApprove }) => {
     setBusy(true);
     try {
       if (selected) {
-        await subjectMatchApi.override(match.id, { tor_subject_id: selected, note: 'Approved with selected TOR subject' });
+        if (selected.startsWith('work:')) {
+          await subjectMatchApi.override(match.id, { work_experience_id: selected.replace('work:', ''), note: 'Approved with Work Experience' });
+        } else {
+          await subjectMatchApi.override(match.id, { tor_subject_id: selected.replace('tor:', ''), note: 'Approved with selected TOR subject' });
+        }
       }
       await subjectMatchApi.approve(match.id, selected ? 'Approved' : '');
       onApprove(match.id);
@@ -1610,13 +1693,29 @@ const ApproveWithTor = ({ match, torSubjects, onApprove }) => {
     setBusy(false);
   };
 
+  const hasTor = torSubjects && torSubjects.length > 0;
+  const hasWork = workExperiences && workExperiences.length > 0;
+
   return (
     <div className="flex items-center gap-2 flex-wrap">
-      <select className="border border-green-200 px-2 py-1 text-xs min-w-[280px] bg-green-50" value={selected} onChange={(e) => setSelected(e.target.value)}>
-        <option value="">Select TOR subject to approve...</option>
-        {torSubjects.map(subject => (
-          <option key={subject.id} value={subject.id}>{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]</option>
-        ))}
+      <select className="border border-green-200 px-2 py-1 text-xs min-w-[280px] bg-green-50 rounded" value={selected} onChange={(e) => setSelected(e.target.value)}>
+        <option value="">Select TOR subject or Work to approve...</option>
+        {hasTor && (
+          <optgroup label="📜 TOR Subjects">
+            {torSubjects.map(subject => (
+              <option key={subject.id} value={`tor:${subject.id}`}>{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]</option>
+            ))}
+          </optgroup>
+        )}
+        {hasWork && (
+          <optgroup label="💼 Work Experience" style={{ color: '#7e22ce', fontWeight: 'bold' }}>
+            {workExperiences.map(work => (
+              <option key={work.id} value={`work:${work.id}`} style={{ color: '#7e22ce', backgroundColor: '#f3e8ff', fontWeight: '600' }}>
+                💼 [Work] {work.job_title} - {work.company_name} ({work.years} yrs)
+              </option>
+            ))}
+          </optgroup>
+        )}
       </select>
       <Button size="sm" onClick={handleApprove} disabled={busy} className="bg-green-600 hover:bg-green-700 text-white text-xs h-7">
         {busy ? 'Approving...' : 'Approve'}
@@ -1633,7 +1732,8 @@ const RejectWithTor = ({ match, torSubjects, onReject }) => {
     setBusy(true);
     try {
       if (selected) {
-        await subjectMatchApi.override(match.id, { tor_subject_id: selected, note: 'Rejected - subject does not match' });
+        const torId = selected.replace(/^(tor|work):/, '');
+        await subjectMatchApi.override(match.id, { tor_subject_id: torId, note: 'Rejected - subject does not match' });
       }
       await subjectMatchApi.reject(match.id, selected ? 'Rejected' : '');
       onReject(match.id);
@@ -1645,10 +1745,10 @@ const RejectWithTor = ({ match, torSubjects, onReject }) => {
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
-      <select className="border border-red-200 px-2 py-1 text-xs min-w-[280px] bg-red-50" value={selected} onChange={(e) => setSelected(e.target.value)}>
-        <option value="">Select TOR subject to reject...</option>
-        {torSubjects.map(subject => (
-          <option key={subject.id} value={subject.id}>{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]</option>
+      <select className="border border-red-200 px-2 py-1 text-xs min-w-[280px] bg-red-50 rounded" value={selected} onChange={(e) => setSelected(e.target.value)}>
+        <option value="">Select subject to reject...</option>
+        {(torSubjects || []).map(subject => (
+          <option key={subject.id} value={`tor:${subject.id}`}>{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]</option>
         ))}
       </select>
       <Button size="sm" onClick={handleReject} disabled={busy} className="bg-red-600 hover:bg-red-700 text-white text-xs h-7">
@@ -1658,7 +1758,7 @@ const RejectWithTor = ({ match, torSubjects, onReject }) => {
   );
 };
 
-const AssignAndApprove = ({ match, passedSubjects, onApprove, label = 'Select passed TOR subject' }) => {
+const AssignAndApprove = ({ match, passedSubjects, workExperiences, onApprove, label = 'Select passed TOR subject or Work' }) => {
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -1666,8 +1766,12 @@ const AssignAndApprove = ({ match, passedSubjects, onApprove, label = 'Select pa
     if (!selected) return;
     setBusy(true);
     try {
-      await subjectMatchApi.override(match.id, { tor_subject_id: selected, note: 'Selected from applicant TOR subject list' });
-      await subjectMatchApi.approve(match.id, 'Approved after manual TOR selection');
+      if (selected.startsWith('work:')) {
+        await subjectMatchApi.override(match.id, { work_experience_id: selected.replace('work:', ''), note: 'Selected from applicant work experience' });
+      } else {
+        await subjectMatchApi.override(match.id, { tor_subject_id: selected.replace('tor:', ''), note: 'Selected from applicant TOR subject list' });
+      }
+      await subjectMatchApi.approve(match.id, 'Approved after manual selection');
       onApprove(match.id);
     } catch (e) {
       onApprove(match.id);
@@ -1675,13 +1779,29 @@ const AssignAndApprove = ({ match, passedSubjects, onApprove, label = 'Select pa
     setBusy(false);
   };
 
+  const hasTor = passedSubjects && passedSubjects.length > 0;
+  const hasWork = workExperiences && workExperiences.length > 0;
+
   return (
     <div className="flex items-center gap-2 mt-2 flex-wrap">
-      <select className="border px-2 py-1 text-sm min-w-[220px]" value={selected} onChange={(e) => setSelected(e.target.value)}>
+      <select className="border px-2 py-1 text-sm min-w-[240px] rounded" value={selected} onChange={(e) => setSelected(e.target.value)}>
         <option value="">{label}</option>
-        {passedSubjects.map(subject => (
-          <option key={subject.id} value={subject.id}>{subject.code} - {subject.title} ({subject.units}u) {subject.grade ? `[${subject.grade}]` : ''}</option>
-        ))}
+        {hasTor && (
+          <optgroup label="📜 TOR Subjects">
+            {passedSubjects.map(subject => (
+              <option key={subject.id} value={`tor:${subject.id}`}>{subject.code} - {subject.title} ({subject.units}u) {subject.grade ? `[${subject.grade}]` : ''}</option>
+            ))}
+          </optgroup>
+        )}
+        {hasWork && (
+          <optgroup label="💼 Work Experience" style={{ color: '#7e22ce', fontWeight: 'bold' }}>
+            {workExperiences.map(work => (
+              <option key={work.id} value={`work:${work.id}`} style={{ color: '#7e22ce', backgroundColor: '#f3e8ff', fontWeight: '600' }}>
+                💼 [Work] {work.job_title} - {work.company_name} ({work.years} yrs)
+              </option>
+            ))}
+          </optgroup>
+        )}
       </select>
       <Button size="sm" onClick={handleAssign} disabled={!selected || busy} className="text-xs">
         {busy ? 'Assigning...' : 'Assign & Approve'}
