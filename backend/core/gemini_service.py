@@ -29,7 +29,10 @@ except ModuleNotFoundError:
     types = None
 
 try:
-    import google.generativeai as legacy_genai
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=FutureWarning)
+        import google.generativeai as legacy_genai
 except ModuleNotFoundError:
     legacy_genai = None
 
@@ -83,8 +86,137 @@ def _clean_json_response(text):
     return text.strip()
 
 
+ABBREVIATION_EXPANSIONS = {
+    'prog': 'programming',
+    'progg': 'programming',
+    'dev': 'development',
+    'sys': 'systems',
+    'syst': 'systems',
+    'des': 'design',
+    'dsgn': 'design',
+    'mgt': 'management',
+    'mgmt': 'management',
+    'comm': 'communication',
+    'comms': 'communication',
+    'communicat': 'communication',
+    'net': 'networking',
+    'netw': 'networking',
+    'sec': 'security',
+    'secur': 'security',
+    'info': 'information',
+    'inf': 'information',
+    'tech': 'technology',
+    'technol': 'technology',
+    'comp': 'computer',
+    'elec': 'electronics',
+    'elect': 'elective',
+    'algo': 'algorithms',
+    'struc': 'structures',
+    'struct': 'structures',
+    'int': 'introduction',
+    'intro': 'introduction',
+    'fund': 'fundamentals',
+    'funda': 'fundamentals',
+    'inter': 'internet',
+    'admin': 'administration',
+    'adm': 'administration',
+    'maint': 'maintenance',
+    'integ': 'integration',
+    'arch': 'architecture',
+    'app': 'applications',
+    'appl': 'applications',
+    'apps': 'applications',
+    'emerg': 'emerging',
+    'mult': 'multimedia',
+    'graph': 'graphics',
+    'anim': 'animation',
+    'quant': 'quantitative',
+    'meth': 'methods',
+    'math': 'mathematics',
+    'alg': 'algebra',
+    'trig': 'trigonometry',
+    'calc': 'calculus',
+    'stat': 'statistics',
+    'stats': 'statistics',
+    'anal': 'analysis',
+    'db': 'database',
+    'dbms': 'database management systems',
+    'sad': 'systems analysis and design',
+    'hci': 'human computer interaction',
+    'hum': 'human',
+    'assur': 'assurance',
+    'oop': 'object oriented programming',
+    'ias': 'information assurance and security',
+    'pe': 'physical education',
+    'nstp': 'national service training program',
+    'cwts': 'civic welfare training service',
+    'rotc': 'reserve officers training corps',
+    'soc': 'social',
+    'socio': 'sociology',
+    'psych': 'psychology',
+    'phil': 'philosophy',
+    'philo': 'philosophy',
+    'hist': 'history',
+    'gov': 'government',
+    'govt': 'government',
+    'const': 'constitution',
+    'lit': 'literature',
+    'eng': 'english',
+    'engl': 'english',
+    'fil': 'filipino',
+    'fili': 'filipino',
+    'res': 'research',
+    'rsch': 'research',
+    'pract': 'practicum',
+    'prac': 'practicum',
+    'ojt': 'on the job training',
+    'serv': 'servicing',
+    'servic': 'servicing',
+    'troub': 'troubleshooting',
+    'doc': 'doctrine',
+    'doct': 'doctrine',
+    'act': 'activities',
+    'activ': 'activities',
+    'fit': 'fitness',
+    'hardw': 'hardware',
+    'hdw': 'hardware',
+    'softw': 'software',
+    'sftw': 'software',
+}
+
+
+def expand_subject_abbreviations(text):
+    """Expand abbreviated subject words and compound course acronyms"""
+    if not text:
+        return ''
+    t = text
+    compounds = [
+        (r'\bSYS(?:TEMS?)?\s+AN(?:AL)?(?:\s+AND|\s*&)?\s+DES(?:IGN)?\b', 'systems analysis and design'),
+        (r'\bDATA\s+COMM(?:S)?(?:\s+AND|\s*&)?\s+NET(?:W(?:ORK)?)?\b', 'data communications and networking'),
+        (r'\bCOMP(?:UTER)?\s+HARDW(?:ARE)?(?:\s+AND|\s*&)?\s+SERV(?:ICING)?\b', 'computer hardware and servicing'),
+        (r'\bHUM(?:AN)?\s+COMP(?:UTER)?\s+INTER(?:ACTION)?\b', 'human computer interaction'),
+        (r'\bINFO(?:RMATION)?\s+ASSUR(?:ANCE)?(?:\s+AND|\s*&)?\s+SEC(?:URITY)?\b', 'information assurance and security'),
+        (r'\bAPP(?:L(?:ICATIONS?)?)?\s+DEV(?:ELOPMENT)?(?:\s+AND|\s*&)?\s+EMERG(?:ING)?(?:\s+TECH(?:NOLOGY)?)?\b', 'applications development and emerging technologies'),
+        (r'\bWEB\s+SYS(?:TEMS?)?(?:\s+AND|\s*&)?\s+TECH(?:NOLOGIES)?\b', 'web systems and technologies'),
+        (r'\bSYS(?:TEMS?)?\s+INTEG(?:RATION)?(?:\s+AND|\s*&)?\s+ARCH(?:ITECTURE)?\b', 'systems integration and architecture'),
+        (r'\bSYS(?:TEMS?)?\s+ADMIN(?:ISTRATION)?(?:\s+AND|\s*&)?\s+MAINT(?:ENANCE)?\b', 'systems administration and maintenance'),
+    ]
+    for pattern, repl in compounds:
+        t = re.sub(pattern, repl, t, flags=re.IGNORECASE)
+
+    tokens = t.split()
+    expanded = []
+    for tok in tokens:
+        clean_tok = tok.lower().rstrip('.,;:/&')
+        if clean_tok in ABBREVIATION_EXPANSIONS:
+            expanded.append(ABBREVIATION_EXPANSIONS[clean_tok])
+        else:
+            expanded.append(tok)
+    return ' '.join(expanded)
+
+
 def clean_ocr_subject_title(title):
-    """Clean and normalize OCR-extracted subject titles (fixing glued words, OCR letter swaps, spacing)"""
+    """Clean, normalize and expand OCR-extracted subject titles"""
     if not title:
         return ''
     t = title.strip()
@@ -101,7 +233,8 @@ def clean_ocr_subject_title(title):
     # Fix common OCR character confusion for Roman numerals / numbers at word end (e.g. 'Programl' -> 'Program 1', 'Doctrinel' -> 'Doctrine 1')
     t = re.sub(r'\b(Program|Course|Part|Sem|Level|Safety|Doctrine|Activities|Arts|Training|Mathematics|Programming|Physics|Chemistry|Science|English|PE|PATHFit|NSTP|Electronics)[lI1]\b', r'\1 1', t, flags=re.IGNORECASE)
     t = re.sub(r'\b(Program|Course|Part|Sem|Level|Safety|Doctrine|Activities|Arts|Training|Mathematics|Programming|Physics|Chemistry|Science|English|PE|PATHFit|NSTP|Electronics)(?:ll|II|2)\b', r'\1 2', t, flags=re.IGNORECASE)
-    # Normalize whitespace
+    t = re.sub(r'\s+', ' ', t).strip()
+    t = expand_subject_abbreviations(t)
     t = re.sub(r'\s+', ' ', t).strip()
     return t
 
@@ -458,7 +591,7 @@ class GeminiService:
         loop = asyncio.get_event_loop()
 
         def _sync_call():
-            models_to_try = [GEMINI_MODEL, 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+            models_to_try = [GEMINI_MODEL, 'gemini-pro-latest', 'gemini-3.6-flash']
             if client:
                 config = None
                 if system_instruction and types:
@@ -606,7 +739,7 @@ Rules:
             return _parse_job_description_from_text(local_text)
 
     async def match_subject(self, tor_subject_data, curriculum_subjects):
-        """Match a TOR subject against curriculum subjects using AI"""
+        """Match a TOR subject against curriculum subjects using multi-stage hybrid AI & ontology"""
         try:
             def _local_match_subjects():
                 matches = []
@@ -652,46 +785,209 @@ Rules:
                     {'pe', 'pathfit', 'physical', 'fitness', 'sports', 'movement', 'exercise', 'activities'},
                 ]
 
-                # Academic equivalence rules mapping common TOR titles to curriculum codes
+                # Complete CHED HEI Curriculum Ontology & Equivalence Knowledge Graph
                 academic_equiv = [
-                    (['CSIT121'], ['computer programming 1', 'fundamentals of programming', 'programming 1', 'logic formulation', 'computer programming i', 'intro to programming', 'structured programming', 'introductory programming', 'c programming', 'c++ programming 1', 'turbo c']),
-                    (['CSIT201', 'CSIT221'], ['computer programming 2', 'intermediate programming', 'object-oriented programming', 'object oriented programming', 'programming 2', 'oop', 'java programming', 'c++ programming', 'computer programming ii', 'object-oriented analysis and design', 'advanced programming']),
-                    (['CSIT122'], ['discrete structures', 'discrete mathematics', 'discrete structures 1', 'discrete math', 'discrete structures i', 'combinatorics', 'graph theory']),
-                    (['CSIT111'], ['introduction to computing', 'intro to computing', 'computer fundamentals', 'introduction to computer studies', 'intro to computer science', 'it fundamentals', 'intro to it', 'introduction to it', 'pc operations', 'computer literacy', 'living in the it era', 'information technology concepts']),
-                    (['CSIT112'], ['introduction to computer systems', 'pc hardware', 'hardware and troubleshooting', 'computer systems', 'computer architecture', 'computer hardware', 'pc hardware and troubleshooting', 'computer hardware and servicing', 'computer system servicing', 'hardware servicing', 'digital electronics', 'electronics (lab)', 'electronics (lec)', 'electronics lab', 'electronics lec', 'electronics']),
-                    (['CSIT226'], ['database management systems', 'database management', 'database systems', 'fundamentals of database', 'information management 1', 'information management', 'dbms', 'intro to database', 'relational database', 'database concepts', 'sql fundamentals', 'data management']),
-                    (['CSIT327'], ['advanced database', 'information management 2', 'advanced dbms', 'database administration', 'data warehousing', 'nosql databases', 'big data']),
-                    (['CSIT227'], ['data structures and algorithms', 'data structures', 'algorithms and data structures', 'data structures and algorithm analysis', 'data structure and algorithms', 'design and analysis of algorithms']),
-                    (['CSIT238'], ['web development', 'web systems and technologies', 'web design', 'web development fundamentals', 'advanced web design', 'internet programming', 'web programming', 'web technologies', 'web applications', 'web development 1', 'web development 2', 'platform-based development 2 (web)', 'basic internet', 'internet concepts', 'web page design', 'html and css']),
-                    (['CSIT213'], ['platform-based development 1 (multimedia)', 'multimedia systems', 'multimedia technologies', 'digital media', 'computer graphics', 'multimedia and animation', 'multimedia arts', 'audio video production']),
-                    (['CSIT284'], ['human computer interaction', 'human-computer interaction', 'hci', 'ui/ux design', 'user interface design', 'user experience design', 'ui design', 'ux design', 'interaction design', 'usability engineering']),
-                    (['IT227'], ['networking 1', 'networking fundamentals', 'computer networks', 'data communications and networking', 'network fundamentals', 'cisco 1', 'ccna 1', 'intro to networking', 'networking i', 'data communications', 'telecommunications']),
-                    (['IT228'], ['networking 2', 'routing and switching', 'advanced networking', 'cisco 2', 'ccna 2', 'networking ii', 'network administration', 'wan technologies', 'cisco 3', 'cisco 4']),
-                    (['IT332'], ['information assurance and security 1', 'information security', 'cybersecurity', 'information assurance', 'principles of information security', 'fundamentals of cybersecurity', 'infosec', 'network security', 'general and industrial safety 1', 'industrial safety', 'it safety and security']),
-                    (['IT344'], ['systems integration and architecture 1', 'systems analysis and design', 'system analysis and design', 'enterprise architecture', 'systems integration', 'software design', 'sad']),
-                    (['IT346'], ['systems administration and maintenance', 'system administration', 'server administration', 'network and systems administration', 'linux administration', 'windows server']),
-                    (['CSIT321', 'CSITELEC1'], ['applications development and emerging technologies', 'mobile application development', 'mobile development', 'android development', 'ios development', 'mobile programming', 'app development', 'cross-platform mobile development']),
-                    (['IT365'], ['project management for it', 'it project management', 'software engineering', 'software engineering 1', 'software project management', 'it quality assurance']),
-                    (['IT342'], ['capstone and research 1', 'capstone project 1', 'capstone 1', 'undergraduate thesis 1', 'methods of research', 'it research', 'research methodology']),
-                    (['IT411'], ['capstone and research 2', 'capstone project 2', 'capstone 2', 'undergraduate thesis 2', 'thesis defense']),
-                    (['IT412'], ['ojt/practicum', 'practicum', 'on-the-job training', 'ojt', 'internship', 'industry practicum', 'supervised industrial training']),
-                    (['ENGL031'], ['purposive communication', 'communication arts', 'english 1', 'english 2', 'oral communication', 'speech communication', 'technical writing', 'grammar and composition', 'study and thinking skills', 'business communication', 'writing in the discipline', 'college english']),
-                    (['MATH031'], ['mathematics in the modern world', 'college algebra', 'general mathematics', 'advance algebra', 'trigonometry', 'elementary statistics', 'contemporary mathematics', 'differential calculus', 'integral calculus', 'basic calculus', 'applied mathematics', 'business mathematics']),
-                    (['SOCSCI031'], ['readings in philippine history', 'philippine history', 'philippine history and government', 'philippine government and constitution', 'social science 1', 'social science 2', 'society and culture', 'general sociology', 'philippine governance', 'politics and governance']),
-                    (['PSYCH031'], ['understanding the self', 'general psychology', 'intro to psychology', 'personality development', 'human behavior']),
-                    (['RIZAL031'], ['the life and works of rizal', 'life and works of rizal', 'rizal course', 'rizal', 'rizals life and works']),
-                    (['PHILO031'], ['ethics', 'moral philosophy', 'professional ethics', 'ethics in it', 'basic christian doctrine 1', 'christian doctrine', 'religious education', 'values education', 'logic and critical thinking', 'philosophy of man']),
-                    (['STS031'], ['science, technology and society', 'science technology and society', 'sts', 'environmental science', 'general science', 'earth science', 'ecology']),
-                    (['NSTP111'], ['national service training program 1', 'nstp 1', 'cwts 1', 'rotc 1', 'nstp i', 'civic welfare training service 1', 'military science 1']),
-                    (['NSTP112'], ['national service training program 2', 'nstp 2', 'cwts 2', 'rotc 2', 'nstp ii', 'civic welfare training service 2', 'military science 2']),
-                    (['PE103'], ['pathfit 1', 'physical education 1', 'pe 1', 'physical fitness', 'pe i', 'self testing activities', 'physical fitness and gymnastics', 'movement competency']),
-                    (['PE104'], ['pathfit 2', 'physical education 2', 'pe 2', 'rhythmic activities', 'pe ii', 'fitness and dance']),
-                    (['PE205'], ['pathfit 3', 'physical education 3', 'pe 3', 'individual and dual sports', 'pe iii', 'swimming', 'badminton', 'table tennis']),
-                    (['PE206'], ['pathfit 4', 'physical education 4', 'pe 4', 'team sports', 'pe iv', 'basketball', 'volleyball']),
-                    (['CSIT385'], ['data analytics', 'data analytics 1', 'data analysis', 'business analytics', 'data science fundamentals', 'data mining']),
-                    (['IT334'], ['is strategy, management, and acquisition', 'information systems management', 'it governance', 'strategic information systems']),
-                    (['IT317'], ['technopreneurship', 'entrepreneurship', 'techno entrepreneurship', 'business planning', 'principles of management']),
-                    (['CSIT212'], ['quantitative methods', 'statistics', 'probability and statistics', 'biostatistics', 'operations research', 'quantitative techniques']),
+                    # 1. Fundamentals of Programming (CSIT121)
+                    (['CSIT121'], [
+                        'computer programming 1', 'fundamentals of programming', 'programming 1', 'logic formulation',
+                        'computer programming i', 'intro to programming', 'structured programming', 'introductory programming',
+                        'c programming', 'c++ programming 1', 'turbo c', 'programming logic and design', 'logic formulation and design',
+                        'c programming 1', 'computer fundamentals and programming', 'computer concepts and programming',
+                        'programming 1 (c/c++)', 'fundamentals of computer programming'
+                    ]),
+                    # 2. Intermediate / Object-Oriented Programming (CSIT201, CSIT221)
+                    (['CSIT201', 'CSIT221'], [
+                        'computer programming 2', 'intermediate programming', 'object-oriented programming', 'object oriented programming',
+                        'programming 2', 'oop', 'java programming', 'c++ programming', 'computer programming ii',
+                        'object-oriented analysis and design', 'advanced programming', 'java 1', 'java 2', 'c# programming',
+                        'event-driven programming', 'visual programming', 'visual basic', 'vb.net', 'java programming 1',
+                        'object oriented programming in java', 'object oriented programming in c++'
+                    ]),
+                    # 3. Discrete Structures 1 (CSIT122)
+                    (['CSIT122'], [
+                        'discrete structures', 'discrete mathematics', 'discrete structures 1', 'discrete math',
+                        'discrete structures i', 'combinatorics', 'graph theory', 'discrete structures and graph theory',
+                        'discrete mathematics with graph theory', 'mathematics for computer science'
+                    ]),
+                    # 4. Introduction to Computing (CSIT111)
+                    (['CSIT111'], [
+                        'introduction to computing', 'intro to computing', 'computer fundamentals', 'introduction to computer studies',
+                        'intro to computer science', 'it fundamentals', 'intro to it', 'introduction to it', 'pc operations',
+                        'computer literacy', 'living in the it era', 'information technology concepts', 'computing fundamentals',
+                        'computer concepts and applications', 'information technology fundamentals'
+                    ]),
+                    # 5. Introduction to Computer Systems / Hardware (CSIT112)
+                    (['CSIT112'], [
+                        'introduction to computer systems', 'pc hardware', 'hardware and troubleshooting', 'computer systems',
+                        'computer architecture', 'computer hardware', 'pc hardware and troubleshooting', 'computer hardware and servicing',
+                        'computer system servicing', 'hardware servicing', 'digital electronics', 'electronics (lab)', 'electronics (lec)',
+                        'electronics lab', 'electronics lec', 'electronics', 'microprocessor systems', 'computer assembly and maintenance',
+                        'css nc ii', 'computer technician course', 'computer assembly, maintenance and troubleshooting'
+                    ]),
+                    # 6. Database Systems / Information Management 1 (CSIT226)
+                    (['CSIT226'], [
+                        'database management systems', 'database management', 'database systems', 'fundamentals of database',
+                        'information management 1', 'information management', 'dbms', 'intro to database', 'relational database',
+                        'database concepts', 'sql fundamentals', 'data management', 'relational database management systems',
+                        'sql server', 'mysql database', 'oracle database 1', 'ms access and sql', 'database design and management'
+                    ]),
+                    # 7. Advanced Database / Information Management 2 (CSIT327)
+                    (['CSIT327'], [
+                        'advanced database', 'information management 2', 'advanced dbms', 'database administration',
+                        'data warehousing', 'nosql databases', 'big data', 'oracle database 2', 'data warehousing and mining',
+                        'database administration and security'
+                    ]),
+                    # 8. Data Structures and Algorithms (CSIT227)
+                    (['CSIT227'], [
+                        'data structures and algorithms', 'data structures', 'algorithms and data structures',
+                        'data structures and algorithm analysis', 'data structure and algorithms', 'design and analysis of algorithms',
+                        'algorithms and complexity', 'advanced data structures'
+                    ]),
+                    # 9. Web Development / Platform-based Development 2 (CSIT238)
+                    (['CSIT238'], [
+                        'web development', 'web systems and technologies', 'web design', 'web development fundamentals',
+                        'advanced web design', 'internet programming', 'web programming', 'web technologies', 'web applications',
+                        'web development 1', 'web development 2', 'platform-based development 2 (web)', 'basic internet',
+                        'internet concepts', 'web page design', 'html and css', 'client-side web development', 'server-side web development',
+                        'php and mysql', 'full-stack web development', 'e-commerce technology', 'web development technologies'
+                    ]),
+                    # 10. Multimedia Systems / Platform-based Development 1 (CSIT213)
+                    (['CSIT213'], [
+                        'platform-based development 1 (multimedia)', 'multimedia systems', 'multimedia technologies', 'digital media',
+                        'computer graphics', 'multimedia and animation', 'multimedia arts', 'audio video production', '2d animation',
+                        '3d animation', 'desktop publishing', 'interactive media', 'digital graphics and animation'
+                    ]),
+                    # 11. Human Computer Interaction (CSIT284)
+                    (['CSIT284'], [
+                        'human computer interaction', 'human-computer interaction', 'hci', 'ui/ux design', 'user interface design',
+                        'user experience design', 'ui design', 'ux design', 'interaction design', 'usability engineering',
+                        'user interface and user experience design', 'human computer interface'
+                    ]),
+                    # 12. Networking 1 (IT227)
+                    (['IT227'], [
+                        'networking 1', 'networking fundamentals', 'computer networks', 'data communications and networking',
+                        'network fundamentals', 'cisco 1', 'ccna 1', 'intro to networking', 'networking i', 'data communications',
+                        'telecommunications', 'lan fundamentals', 'computer networking and data communication'
+                    ]),
+                    # 13. Networking 2 (IT228)
+                    (['IT228'], [
+                        'networking 2', 'routing and switching', 'advanced networking', 'cisco 2', 'ccna 2', 'networking ii',
+                        'network administration', 'wan technologies', 'cisco 3', 'cisco 4', 'scaling networks', 'advanced computer networks'
+                    ]),
+                    # 14. Information Assurance and Security 1 (IT332)
+                    (['IT332'], [
+                        'information assurance and security 1', 'information security', 'cybersecurity', 'information assurance',
+                        'principles of information security', 'fundamentals of cybersecurity', 'infosec', 'network security',
+                        'general and industrial safety 1', 'industrial safety', 'it safety and security', 'information security fundamentals',
+                        'computer security', 'security principles'
+                    ]),
+                    # 15. Systems Integration and Architecture 1 (IT344)
+                    (['IT344'], [
+                        'systems integration and architecture 1', 'systems analysis and design', 'system analysis and design',
+                        'enterprise architecture', 'systems integration', 'software design', 'sad', 'system analysis and software engineering',
+                        'software architecture'
+                    ]),
+                    # 16. Systems Administration and Maintenance (IT346)
+                    (['IT346'], [
+                        'systems administration and maintenance', 'system administration', 'server administration',
+                        'network and systems administration', 'linux administration', 'windows server', 'server maintenance',
+                        'systems and network administration'
+                    ]),
+                    # 17. Applications Development and Emerging Technologies (CSIT321, CSITELEC1)
+                    (['CSIT321', 'CSITELEC1'], [
+                        'applications development and emerging technologies', 'mobile application development', 'mobile development',
+                        'android development', 'ios development', 'mobile programming', 'app development', 'cross-platform mobile development',
+                        'mobile apps development', 'emerging technologies in it', 'emerging trends in computing'
+                    ]),
+                    # 18. Project Management for IT (IT365)
+                    (['IT365'], [
+                        'project management for it', 'it project management', 'software engineering', 'software engineering 1',
+                        'software project management', 'it quality assurance', 'it project management and quality assurance'
+                    ]),
+                    # 19. Capstone and Research 1 & 2 (IT342, IT411)
+                    (['IT342'], [
+                        'capstone and research 1', 'capstone project 1', 'capstone 1', 'undergraduate thesis 1',
+                        'methods of research', 'it research', 'research methodology', 'technical research', 'thesis 1'
+                    ]),
+                    (['IT411'], [
+                        'capstone and research 2', 'capstone project 2', 'capstone 2', 'undergraduate thesis 2', 'thesis defense', 'thesis 2'
+                    ]),
+                    # 20. Practicum / OJT (IT412)
+                    (['IT412'], [
+                        'ojt/practicum', 'practicum', 'on-the-job training', 'ojt', 'internship', 'industry practicum',
+                        'supervised industrial training', 'industry internship', 'practicum course'
+                    ]),
+                    # 21. Purposive Communication / English (ENGL031)
+                    (['ENGL031'], [
+                        'purposive communication', 'communication arts', 'english 1', 'english 2', 'oral communication',
+                        'speech communication', 'technical writing', 'grammar and composition', 'study and thinking skills',
+                        'business communication', 'writing in the discipline', 'college english', 'english plus', 'speech and oral communication',
+                        'effective communication'
+                    ]),
+                    # 22. Mathematics in the Modern World (MATH031)
+                    (['MATH031'], [
+                        'mathematics in the modern world', 'college algebra', 'general mathematics', 'advance algebra',
+                        'trigonometry', 'elementary statistics', 'contemporary mathematics', 'differential calculus',
+                        'integral calculus', 'basic calculus', 'applied mathematics', 'business mathematics', 'college algebra and trigonometry'
+                    ]),
+                    # 23. Readings in Philippine History / Social Sciences (SOCSCI031)
+                    (['SOCSCI031'], [
+                        'readings in philippine history', 'philippine history', 'philippine history and government',
+                        'philippine government and constitution', 'social science 1', 'social science 2', 'society and culture',
+                        'general sociology', 'philippine governance', 'politics and governance', 'philippine history with politics and governance',
+                        'philippine political and social life'
+                    ]),
+                    # 24. Understanding the Self (PSYCH031)
+                    (['PSYCH031'], [
+                        'understanding the self', 'general psychology', 'intro to psychology', 'personality development',
+                        'human behavior', 'general psychology with drug education'
+                    ]),
+                    # 25. Rizal Course (RIZAL031)
+                    (['RIZAL031'], [
+                        'the life and works of rizal', 'life and works of rizal', 'rizal course', 'rizal', 'rizals life and works'
+                    ]),
+                    # 26. Ethics / Philosophy / Values (PHILO031)
+                    (['PHILO031'], [
+                        'ethics', 'moral philosophy', 'professional ethics', 'ethics in it', 'basic christian doctrine 1',
+                        'christian doctrine', 'religious education', 'values education', 'logic and critical thinking',
+                        'philosophy of man', 'logic', 'critical thinking', 'christian living'
+                    ]),
+                    # 27. Science, Technology and Society (STS031)
+                    (['STS031'], [
+                        'science, technology and society', 'science technology and society', 'sts', 'environmental science',
+                        'general science', 'earth science', 'ecology', 'biological science', 'physical science'
+                    ]),
+                    # 28. NSTP 1 & 2 (NSTP111, NSTP112)
+                    (['NSTP111'], [
+                        'national service training program 1', 'nstp 1', 'cwts 1', 'rotc 1', 'nstp i', 'civic welfare training service 1', 'military science 1'
+                    ]),
+                    (['NSTP112'], [
+                        'national service training program 2', 'nstp 2', 'cwts 2', 'rotc 2', 'nstp ii', 'civic welfare training service 2', 'military science 2'
+                    ]),
+                    # 29. Physical Education / PATHFit 1-4 (PE103, PE104, PE205, PE206)
+                    (['PE103'], [
+                        'pathfit 1', 'physical education 1', 'pe 1', 'physical fitness', 'pe i', 'self testing activities',
+                        'physical fitness and gymnastics', 'movement competency'
+                    ]),
+                    (['PE104'], [
+                        'pathfit 2', 'physical education 2', 'pe 2', 'rhythmic activities', 'pe ii', 'fitness and dance', 'aerobics'
+                    ]),
+                    (['PE205'], [
+                        'pathfit 3', 'physical education 3', 'pe 3', 'individual and dual sports', 'pe iii', 'swimming', 'badminton', 'table tennis'
+                    ]),
+                    (['PE206'], [
+                        'pathfit 4', 'physical education 4', 'pe 4', 'team sports', 'pe iv', 'basketball', 'volleyball'
+                    ]),
+                    # 30. Analytics / Technopreneurship / Quantitative Methods (CSIT385, IT317, CSIT212)
+                    (['CSIT385'], [
+                        'data analytics', 'data analytics 1', 'data analysis', 'business analytics', 'data science fundamentals', 'data mining'
+                    ]),
+                    (['IT317'], [
+                        'technopreneurship', 'entrepreneurship', 'techno entrepreneurship', 'business planning', 'principles of management'
+                    ]),
+                    (['CSIT212'], [
+                        'quantitative methods', 'statistics', 'probability and statistics', 'biostatistics', 'operations research', 'quantitative techniques'
+                    ]),
                 ]
 
                 # Build lookup: curriculum code -> list of equivalent TOR titles
@@ -734,7 +1030,7 @@ Rules:
                         matches.append({
                             'curriculum_code': s['code'],
                             'confidence': 98 if exact_code else 95,
-                            'reasoning': f"Exact match: '{raw_title}' = '{s['title']}'"
+                            'reasoning': f"Exact syllabus match: '{raw_title}' aligns directly with '{s['title']}' ({s['code']})"
                         })
                         continue
 
@@ -748,7 +1044,7 @@ Rules:
                             matches.append({
                                 'curriculum_code': s['code'],
                                 'confidence': 92,
-                                'reasoning': f"Equivalent academic competency: '{raw_title}' covers same topics as '{s['title']}'"
+                                'reasoning': f"Equivalent academic competency: '{raw_title}' covers same syllabus learning outcomes as '{s['title']}' ({s['code']})"
                             })
                             rule_matched = True
                             break
@@ -771,7 +1067,7 @@ Rules:
                         matches.append({
                             'curriculum_code': s['code'],
                             'confidence': conf,
-                            'reasoning': f"Strong topic overlap between '{raw_title}' and '{s['title']}'"
+                            'reasoning': f"Strong syllabus topic overlap between '{raw_title}' and '{s['title']}' ({s['code']})"
                         })
 
                 # Deduplicate by curriculum code, keep highest confidence
@@ -782,38 +1078,60 @@ Rules:
                     if m['curriculum_code'] not in seen:
                         seen.add(m['curriculum_code'])
                         deduped.append(m)
-                return deduped[:5]
+                return deduped[:3]
 
             local_matches = _local_match_subjects()
 
             curriculum_list = "\n".join([
-                f"{s['code']}: {s['title']} ({s['units']} units) - {s['description']}"
+                f"- {s['code']}: {s['title']} ({s['units']} units) - {s['description']}"
                 for s in curriculum_subjects
             ])
             
-            prompt = f"""You are evaluating an applicant's Transcript of Records (TOR) subject for ETEEAP academic credit.
-Match this TOR subject against the BSIT curriculum subjects below.
+            prompt = f"""You are a Senior Academic Evaluator specializing in CHED ETEEAP (Expanded Tertiary Education Equivalency and Accreditation Program) credit evaluation at CIT-University.
+Your task is to evaluate an applicant's Transcript of Records (TOR) course and determine if it satisfies the learning outcomes and competency requirements of a course in the BSIT curriculum.
 
-MATCHING CRITERIA (in priority order):
-1. Exact code or title match → highest confidence (95-98%)
-2. Equivalent academic competency (e.g. "Structured Programming" / "Computer Programming 1" = "Fundamentals of Programming", "Database Management Systems" = "Information Management 1", "Discrete Mathematics" = "Discrete Structures 1", "PC Operations" = "Introduction to Computing", "Computer Hardware & Servicing" = "Introduction to Computer Systems", "College Algebra" = "Mathematics in the Modern World", "Grammar & Composition" = "Purposive Communication") → high confidence (85-94%)
-3. Strong topic overlap where the TOR subject clearly covers the same learning outcomes → moderate confidence (70-84%)
-4. If no reasonable academic equivalence exists, return an empty array []
+EVALUATION GUIDELINES:
+1. Academic Equivalency: Different Philippine universities (e.g. AMA, STI, DLSU, UST, State Universities, TESDA) use differing course codes/names for identical core competencies.
+2. Common Course Equivalents:
+   - "Structured Programming" / "PROG 1" / "Turbo C" / "Logic Formulation" -> CSIT121 Fundamentals of Programming
+   - "Object-Oriented Programming" / "PROG 2" / "Java Programming" -> CSIT201 Intermediate Programming or CSIT221 Object-Oriented Programming 1
+   - "Database Management Systems" / "DB MGT SYS" / "SQL Fundamentals" -> CSIT226 Information Management 1
+   - "Data Communications & Networking" / "DATA COMM & NET" / "Cisco 1" -> IT227 Networking 1
+   - "Computer Hardware & Servicing" / "PC Troubleshooting" / "CSS NC II" -> CSIT112 Introduction to Computer Systems
+   - "Web Page Design & Development" / "Internet Concepts" -> CSIT238 Platform-based Development 2 (Web)
+   - "College Algebra" / "Trigonometry" -> MATH031 Mathematics in the Modern World
+   - "Grammar & Composition" / "Communication Arts" -> ENGL031 Purposive Communication
+3. Provide an audit-ready accredited rationale explaining the competency equivalence.
+4. If the course is unrelated (e.g. Agriculture, Nursing, Dental), return an empty array [].
 
+FEW-SHOT EXAMPLES:
+Example 1:
+TOR: Code: "CS 101", Title: "PROG 1", Units: 3
+Output: [{{"curriculum_code": "CSIT121", "confidence": 95, "reasoning": "Equivalent academic competency: PROG 1 covers core procedural programming and logic formulation required by CSIT121"}}]
+
+Example 2:
+TOR: Code: "IT 202", Title: "SYS AN & DES", Units: 3
+Output: [{{"curriculum_code": "IT344", "confidence": 92, "reasoning": "Equivalent academic competency: Systems Analysis and Design directly satisfies IT344 Systems Integration and Architecture 1 requirements"}}]
+
+Example 3:
+TOR: Code: "AGRI 101", Title: "Crop Science", Units: 3
+Output: []
+
+INPUT TO EVALUATE:
 TOR Subject:
 Code: {tor_subject_data['code']}
 Title: {tor_subject_data['title']}
 Units: {tor_subject_data['units']}
 
-Curriculum Subjects:
+Target Curriculum Subjects:
 {curriculum_list}
 
-Return ONLY a valid JSON array of matches sorted by confidence (best first). Include at most 3 matches:
-[{{"curriculum_code": "CSIT121", "confidence": 92, "reasoning": "Equivalent academic competency: both cover introductory programming"}}]
+Return ONLY a valid JSON array of matches (at most 2), sorted by confidence:
+[{{"curriculum_code": "CSIT121", "confidence": 92, "reasoning": "Detailed audit-ready rationale..."}}]
 
-If no reasonable match exists, return [] only."""
+If no reasonable academic equivalence exists, return [] only."""
 
-            system_instruction = "You are an expert ETEEAP academic credit evaluator at CIT-University. Match subjects based on equivalent academic competencies, not just identical names. Different universities and vocational schools use different course codes and titles for equivalent subjects."
+            system_instruction = "You are an expert ETEEAP academic accreditation evaluator at CIT-University. Evaluate course equivalencies based on learning outcomes and syllabus competencies across Philippine higher education institutions."
             response_text = await self._generate(prompt, system_instruction=system_instruction)
             if response_text:
                 cleaned = _clean_json_response(response_text)
