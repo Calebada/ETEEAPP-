@@ -204,14 +204,4 @@ cd backend
 python manage.py createsuperuser
 ```
 
----
-
-If you'd like, I can also:
-- commit this README update and push it to the repository for you,
-- add a sample `.env.example` file with the suggested variables, or
-- add a short troubleshooting script that validates Python/Node versions and required env vars.
-
----
-
-File updated: [README.md](README.md)
 
