@@ -4,7 +4,22 @@
 
 ACCREDIA is a web-based platform developed for the **Cebu Institute of Technology – University (CIT-U)** to digitize, automate, and intelligently streamline the **Expanded Tertiary Education Equivalency and Accreditation Program (ETEEAP)** enrollment process. The system functions as an AI-powered, document-driven evaluation pipeline specifically designed for the BSIT program.
 
-> ETEEAP allows working professionals to earn academic credit for prior education, industry experience, and life experiences. ACCREDIA automates the document-heavy, manual evaluation that this requires.
+> ETEEAP allows working professionals to earn academic credit for prior education, industry experience, and life experiences. ACCREDIA automates the manual, document-heavy evaluation that this requires.
+
+---
+
+## 🌐 Live Deployment
+
+The application is deployed and publicly accessible:
+
+| Service | Type | URL |
+|---------|------|-----|
+| **Frontend** | Vercel (React SPA) | https://accredia-eight.vercel.app |
+| **Backend API** | Render (Django) | https://accredia-backend.onrender.com |
+| **Health Check** | Backend | https://accredia-backend.onrender.com/api/ |
+| **Database** | Supabase PostgreSQL | *(managed via Render `DATABASE_URL` env var)* |
+
+**Note:** The Django API has no homepage route — the root path (`/`) intentionally returns 404. The public health-check/API base is `/api/`.
 
 ---
 
