@@ -1,0 +1,44 @@
+
+> frontend@0.1.0 build
+> craco build
+
+Creating an optimized production build...
+Compiled with warnings.
+
+[eslint] 
+src\pages\ApplicantDashboard.jsx
+  Line 34:6:  React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+src\pages\ApplyPage.jsx
+  Line 112:6:  React Hook useEffect has a missing dependency: 'loadApplication'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+src\pages\EvaluationPage.jsx
+  Line 27:6:  React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+src\pages\EvaluatorReviewPage.jsx
+  Line 199:6:  React Hook useEffect has a missing dependency: 'loadData'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+Search for the keywords to learn more about each warning.
+To ignore, add // eslint-disable-next-line to the line before.
+
+File sizes after gzip:
+
+  312.21 kB  build\static\js\main.cb7ddcd4.js
+  46.35 kB   build\static\js\239.e39fb35b.chunk.js
+  43.31 kB   build\static\js\455.d639c004.chunk.js
+  11.97 kB   build\static\css\main.949f9ea0.css
+  9.63 kB    build\static\js\977.3e68c99d.chunk.js
+
+The project was built assuming it is hosted at /.
+You can control this with the homepage field in your package.json.
+
+The build folder is ready to be deployed.
+You may serve it with a static server:
+
+  npm install -g serve
+  serve -s build
+
+Find out more about deployment here:
+
+  https://cra.link/deployment
+
