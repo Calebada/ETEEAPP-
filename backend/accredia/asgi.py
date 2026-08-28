@@ -1,5 +1,5 @@
 """
-ASGI config for acredia project.
+ASGI config for accredia project.
 
 It exposes the ASGI callable as a module-level variable named ``application``.
 
@@ -11,6 +11,6 @@ import os
 
 from django.core.asgi import get_asgi_application
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "acredia.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "accredia.settings")
 
 application = get_asgi_application()

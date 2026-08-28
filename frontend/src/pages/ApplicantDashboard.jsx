@@ -551,7 +551,7 @@ export const ApplicantDashboard = () => {
               <Sparkles className="w-8 h-8 text-gold mb-3" />
               <h3 className="font-serif font-bold text-xl mb-2">Need Help?</h3>
               <p className="text-sm text-gray-200 mb-4">
-                Chat with AcrediaBot for instant answers about ETEEAP, evaluation, and more.
+                Chat with AccrediaBot for instant answers about ETEEAP, evaluation, and more.
               </p>
               <p className="text-xs text-gray-300">
                 Click the chat icon in the bottom right corner →

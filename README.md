@@ -106,7 +106,7 @@ Alternative (ASGI/uvicorn):
 
 ```bash
 pip install uvicorn
-uvicorn acredia.asgi:application --reload --host 0.0.0.0 --port 8000
+uvicorn accredia.asgi:application --reload --host 0.0.0.0 --port 8000
 ```
 
 7) Optional: OCR / model dependencies

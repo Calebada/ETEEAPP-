@@ -649,7 +649,7 @@ class ChatConversationViewSet(viewsets.ModelViewSet):
 def health_check(request):
     return Response({
         'status': 'ok',
-        'message': 'ACREDIA API is running',
+        'message': 'ACCREDIA API is running',
         'version': '1.0.0'
     })
 

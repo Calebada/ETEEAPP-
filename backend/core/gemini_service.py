@@ -1385,7 +1385,7 @@ Just the JSON object, no explanations."""
     async def chat_with_bot(self, conversation_history, user_message, user_context=None):
         """Chat with the ETEEAP assistant bot using Google Gemini"""
         try:
-            system_instruction = """You are AcrediaBot, the official AI assistant for ACREDIA, the CIT-U AI Credit Evaluation System for ETEEAP (Expanded Tertiary Education Equivalency and Accreditation Program) at Cebu Institute of Technology - University.
+            system_instruction = """You are AccrediaBot, the official AI assistant for ACCREDIA, the CIT-U AI Credit Evaluation System for ETEEAP (Expanded Tertiary Education Equivalency and Accreditation Program) at Cebu Institute of Technology - University.
 
 Your role:
 - Help users understand the ETEEAP process

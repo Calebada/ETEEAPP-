@@ -51,7 +51,7 @@ export const LoginPage = () => {
               <GraduationCap className="w-7 h-7 text-gray-900" />
             </div>
             <div>
-              <div className="font-serif font-bold text-2xl">ACREDIA</div>
+              <div className="font-serif font-bold text-2xl">ACCREDIA</div>
               <div className="text-xs uppercase tracking-wider opacity-80">CIT-University</div>
             </div>
           </Link>
@@ -79,7 +79,7 @@ export const LoginPage = () => {
               <GraduationCap className="w-6 h-6 text-white" />
             </div>
             <div>
-              <div className="font-serif font-bold text-xl text-maroon">ACREDIA</div>
+              <div className="font-serif font-bold text-xl text-maroon">ACCREDIA</div>
               <div className="text-xs text-gray-500 uppercase tracking-wider">CIT-U</div>
             </div>
           </div>

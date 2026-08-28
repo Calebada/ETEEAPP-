@@ -65,7 +65,7 @@ export const LandingPage = () => {
               </h1>
               
               <p className="text-lg text-gray-600 leading-relaxed max-w-xl">
-                ACREDIA is the official AI Credit Evaluation System of Cebu Institute of Technology - University. Get academic credit for your prior education and work experience through ETEEAP.
+                ACCREDIA is the official AI Credit Evaluation System of Cebu Institute of Technology - University. Get academic credit for your prior education and work experience through ETEEAP.
               </p>
               
               <div className="flex flex-col sm:flex-row gap-4">
@@ -150,7 +150,7 @@ export const LandingPage = () => {
           <div className="text-center max-w-3xl mx-auto mb-16">
             <div className="text-sm uppercase tracking-widest text-maroon font-semibold mb-3">Features</div>
             <h2 className="font-serif text-3xl sm:text-4xl lg:text-5xl font-bold mb-4">
-              How ACREDIA evaluates your credentials
+              How ACCREDIA evaluates your credentials
             </h2>
             <p className="text-gray-600 text-lg">
               Combining cutting-edge AI with academic expertise to provide accurate credit evaluation.
@@ -235,7 +235,7 @@ export const LandingPage = () => {
             <div className="flex items-center gap-2">
               <GraduationCap className="w-6 h-6 text-gold" />
               <div>
-                <div className="font-serif font-bold text-white">ACREDIA</div>
+                <div className="font-serif font-bold text-white">ACCREDIA</div>
                 <div className="text-xs">CIT-U Credit Evaluation System</div>
               </div>
             </div>
