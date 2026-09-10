@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
-import { ChatbotWidget } from '../components/ChatbotWidget';
 import { DocumentPreviewModal } from '../components/DocumentPreviewModal';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
@@ -12,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { applicationApi, subjectMatchApi, predictionApi, programApi } from '../lib/api';
 import {
   ArrowLeft, Loader2, FileText, Briefcase, CheckCircle2, XCircle,
-  AlertCircle, BookOpen, User, Calendar, MapPin, Phone, Sparkles, Flag, Eye, Download, Home
+  AlertCircle, BookOpen, User, Calendar, MapPin, Phone, Sparkles, Flag, Eye, Download, Home, Pencil, Trash2
 } from 'lucide-react';
 import { toast } from 'sonner';
 import jsPDF from 'jspdf';
@@ -37,116 +36,387 @@ export const EvaluatorReviewPage = () => {
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectMatchId, setRejectMatchId] = useState(null);
+  const [removeMatchId, setRemoveMatchId] = useState(null);
+  const [editingMatch, setEditingMatch] = useState(null);
   const [finalizationComplete, setFinalizationComplete] = useState(false);
+  const [showFullReview, setShowFullReview] = useState(false);
   const approvedTableRef = useRef(null);
 
   const downloadApprovedAsPDF = () => {
     try {
       const approved = matches.filter(m => m.status === 'approved');
-      if (approved.length === 0) {
-        toast.error('No approved subjects to download');
+      const rejected = matches.filter(m => m.status === 'rejected');
+
+      if (approved.length === 0 && rejected.length === 0) {
+        toast.error('No accreditation records to export');
         return;
       }
 
-      const doc = new jsPDF();
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const margin = 10;
-      let yPosition = margin + 10;
+      const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+      const pageWidth = doc.internal.pageSize.getWidth(); // 210mm
+      const pageHeight = doc.internal.pageSize.getHeight(); // 297mm
+      const margin = 14;
+      const contentWidth = pageWidth - (margin * 2); // 182mm
 
-      // Add title
-      doc.setFontSize(16);
-      doc.setFont(undefined, 'bold');
-      doc.text('Approved Subjects Report', margin, yPosition);
-      yPosition += 10;
+      let yPos = margin;
 
-      // Add metadata
-      doc.setFontSize(10);
-      doc.setFont(undefined, 'normal');
-      doc.text(`Application ID: ${application?.id || 'N/A'}`, margin, yPosition);
-      yPosition += 6;
-      doc.text(`Applicant: ${application?.applicant?.first_name} ${application?.applicant?.last_name}`, margin, yPosition);
-      yPosition += 6;
-      doc.text(`Date: ${new Date().toLocaleDateString()}`, margin, yPosition);
-      yPosition += 10;
+      const applicantName = application?.applicant?.full_name || 
+        `${application?.applicant?.first_name || ''} ${application?.applicant?.last_name || ''}`.trim() || 'Applicant';
+      const programName = application?.program?.name || 'Bachelor of Science in Information Technology';
+      const programCode = application?.program?.code || 'BSIT';
+      const totalApprovedUnits = approved.reduce((sum, m) => sum + Number(m.curriculum_subject?.units || 0), 0);
+      const torApprovedCount = approved.filter(m => m.source === 'tor').length;
+      const workApprovedCount = approved.filter(m => m.source === 'work_experience').length;
 
-      // Table headers
-      const colWidths = [25, 65, 20, 40, 25];
-      const headers = ['Code', 'Title', 'Units', 'Source', 'Confidence'];
+      // Function to render header banner on each page
+      const renderHeader = (isFirstPage = true) => {
+        // Top accent bar
+        doc.setFillColor(122, 30, 43); // Maroon #7A1E2B
+        doc.rect(0, 0, pageWidth, 6, 'F');
+        doc.setFillColor(212, 175, 55); // Gold #D4AF37
+        doc.rect(0, 6, pageWidth, 1.5, 'F');
+
+        if (isFirstPage) {
+          // Institution Header
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(13);
+          doc.setTextColor(122, 30, 43);
+          doc.text('CEBU INSTITUTE OF TECHNOLOGY - UNIVERSITY', margin, 16);
+
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          doc.text('Expanded Tertiary Education Equivalency and Accreditation Program (ETEEAP)', margin, 21);
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(15);
+          doc.setTextColor(15, 23, 42);
+          doc.text('Official Subject Accreditation & Equivalency Report', margin, 29);
+
+          // Divider Line
+          doc.setDrawColor(226, 232, 240);
+          doc.setLineWidth(0.5);
+          doc.line(margin, 32, pageWidth - margin, 32);
+        }
+      };
+
+      // Render first page header
+      renderHeader(true);
+      yPos = 36;
+
+      // Metadata Info Box
+      doc.setFillColor(248, 250, 252);
+      doc.roundedRect(margin, yPos, contentWidth, 23, 2, 2, 'F');
+      doc.setDrawColor(203, 213, 225);
+      doc.roundedRect(margin, yPos, contentWidth, 23, 2, 2, 'S');
+      doc.setFillColor(122, 30, 43);
+      doc.rect(margin, yPos, 2.5, 23, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(71, 85, 105);
+      doc.text('APPLICANT NAME:', margin + 6, yPos + 5.5);
+      doc.text('DEGREE PROGRAM:', margin + 6, yPos + 12);
+      doc.text('APPLICATION ID:', margin + 6, yPos + 18.5);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(15, 23, 42);
+      doc.text(applicantName, margin + 38, yPos + 5.5);
+      doc.text(`${programName} (${programCode})`, margin + 38, yPos + 12);
+      doc.text(`#${application?.id || 'N/A'}`, margin + 38, yPos + 18.5);
+
+      // Right column metadata
+      const col2X = margin + 105;
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(71, 85, 105);
+      doc.text('DATE GENERATED:', col2X, yPos + 5.5);
+      doc.text('TOTAL CREDITS:', col2X, yPos + 12);
+      doc.text('STATUS:', col2X, yPos + 18.5);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(15, 23, 42);
+      doc.text(new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }), col2X + 30, yPos + 5.5);
       
-      // Draw header row
-      doc.setFillColor(37, 99, 235);
-      doc.setTextColor(255, 255, 255);
-      doc.setFont(undefined, 'bold');
-      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(122, 30, 43);
+      doc.text(`${totalApprovedUnits} Units (${approved.length} Subjects)`, col2X + 30, yPos + 12);
 
-      let xPosition = margin;
-      headers.forEach((header, idx) => {
-        doc.rect(xPosition, yPosition - 5, colWidths[idx], 8, 'F');
-        doc.text(header, xPosition + 1, yPosition, { maxWidth: colWidths[idx] - 2 });
-        xPosition += colWidths[idx];
-      });
+      doc.setTextColor(22, 101, 52); // Green
+      doc.text(application?.status === 'finalized' ? 'FINALIZED / ACCREDITED' : 'UNDER REVIEW', col2X + 30, yPos + 18.5);
 
-      yPosition += 10;
-      doc.setTextColor(0, 0, 0);
-      doc.setFont(undefined, 'normal');
+      yPos += 28;
 
-      // Draw data rows
-      approved.forEach((match, idx) => {
-        if (yPosition > doc.internal.pageSize.getHeight() - margin) {
+      // Summary KPI Badges
+      const kpiWidth = (contentWidth - 6) / 3;
+      
+      // Approved Box
+      doc.setFillColor(240, 253, 244);
+      doc.roundedRect(margin, yPos, kpiWidth, 12, 1.5, 1.5, 'F');
+      doc.setDrawColor(187, 247, 208);
+      doc.roundedRect(margin, yPos, kpiWidth, 12, 1.5, 1.5, 'S');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(22, 101, 52);
+      doc.text(`Approved: ${approved.length} Subjects`, margin + 4, yPos + 4.8);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.text(`${totalApprovedUnits} Units Total Credited`, margin + 4, yPos + 9.2);
+
+      // Sources Box
+      doc.setFillColor(239, 246, 255);
+      doc.roundedRect(margin + kpiWidth + 3, yPos, kpiWidth, 12, 1.5, 1.5, 'F');
+      doc.setDrawColor(191, 219, 254);
+      doc.roundedRect(margin + kpiWidth + 3, yPos, kpiWidth, 12, 1.5, 1.5, 'S');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(30, 64, 175);
+      doc.text(`Evidence Sources`, margin + kpiWidth + 7, yPos + 4.8);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.text(`${torApprovedCount} from TOR | ${workApprovedCount} from Work`, margin + kpiWidth + 7, yPos + 9.2);
+
+      // Rejected Box
+      doc.setFillColor(254, 242, 242);
+      doc.roundedRect(margin + (kpiWidth * 2) + 6, yPos, kpiWidth, 12, 1.5, 1.5, 'F');
+      doc.setDrawColor(254, 202, 202);
+      doc.roundedRect(margin + (kpiWidth * 2) + 6, yPos, kpiWidth, 12, 1.5, 1.5, 'S');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(153, 27, 27);
+      doc.text(`Rejected: ${rejected.length} Subjects`, margin + (kpiWidth * 2) + 7, yPos + 4.8);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.text(`Not accredited for degree`, margin + (kpiWidth * 2) + 7, yPos + 9.2);
+
+      yPos += 17;
+
+      // Table Drawing Helper
+      const drawTableSection = (title, items, isApprovedTable = true) => {
+        if (items.length === 0) return;
+
+        // Check space for section title
+        if (yPos > pageHeight - 35) {
           doc.addPage();
-          yPosition = margin;
+          renderHeader(false);
+          yPos = 16;
         }
 
-        // Alternating row colors
-        if (idx % 2 === 0) {
-          doc.setFillColor(245, 245, 245);
-          doc.rect(margin, yPosition - 5, pageWidth - 2 * margin, 8, 'F');
-        }
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10.5);
+        doc.setTextColor(isApprovedTable ? 30 : 153, isApprovedTable ? 64 : 27, isApprovedTable ? 175 : 27);
+        doc.text(`${title} (${items.length})`, margin, yPos);
+        yPos += 4;
 
-        const rowData = [
-          match.curriculum_subject?.code || 'N/A',
-          match.curriculum_subject?.title || 'N/A',
-          match.curriculum_subject?.units || 0,
-          match.source === 'tor' ? 'TOR' : 'Work Exp',
-          `${match.confidence.toFixed(0)}%`
-        ];
+        // Table Columns:
+        // 1. BSIT Curriculum Subject -> 50mm
+        // 2. Matched Applicant Subject / Evidence -> 76mm
+        // 3. Units -> 14mm
+        // 4. Source -> 22mm
+        // 5. Conf / Reason -> 20mm
+        const colW = [50, 76, 14, 22, 20];
+        const headers = isApprovedTable 
+          ? ['BSIT Curriculum Subject', 'Matched Applicant Subject / Evidence', 'Units', 'Source', 'Confidence']
+          : ['BSIT Curriculum Subject', 'Attempted Applicant Subject', 'Units', 'Source', 'Rejection Note'];
 
-        xPosition = margin;
-        rowData.forEach((data, idx) => {
-          const dataStr = String(data);
-          doc.text(dataStr, xPosition + 1, yPosition, { 
-            maxWidth: colWidths[idx] - 2,
-            align: idx === 2 || idx === 4 ? 'center' : 'left'
+        // Header row
+        doc.setFillColor(isApprovedTable ? 37 : 185, isApprovedTable ? 99 : 28, isApprovedTable ? 235 : 28);
+        doc.rect(margin, yPos, contentWidth, 7, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(255, 255, 255);
+
+        let currX = margin;
+        headers.forEach((h, idx) => {
+          const align = (idx === 2 || idx === 3 || (isApprovedTable && idx === 4)) ? 'center' : 'left';
+          const textX = align === 'center' ? currX + (colW[idx] / 2) : currX + 2;
+          doc.text(h, textX, yPos + 4.8, { align });
+          currX += colW[idx];
+        });
+
+        yPos += 7;
+
+        items.forEach((match, rowIdx) => {
+          const curCode = match.curriculum_subject?.code || 'N/A';
+          const curTitle = match.curriculum_subject?.title || 'N/A';
+          const curUnits = String(match.curriculum_subject?.units || 0);
+          
+          let evidenceText = '';
+          if (match.tor_subject) {
+            evidenceText = `${match.tor_subject.code} - ${match.tor_subject.title} (${match.tor_subject.units || 0}u, Grd: ${match.tor_subject.grade || 'N/A'})`;
+          } else if (match.work_experience) {
+            evidenceText = `[Work] ${match.work_experience.job_title} at ${match.work_experience.company_name} (${match.work_experience.years || 0}y)`;
+          } else {
+            evidenceText = 'None recorded';
+          }
+
+          const sourceText = match.source === 'tor' ? 'TOR' : 'Work Exp';
+          const lastColText = isApprovedTable 
+            ? `${match.confidence.toFixed(0)}%` 
+            : (match.evaluator_note || (match.tor_subject && Number(match.tor_subject.units || 0) < Number(match.curriculum_subject?.units || 0) ? 'Insufficient Units' : 'Rejected'));
+
+          // Calculate height
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(7.5);
+          const curLines = doc.splitTextToSize(`${curCode}\n${curTitle}`, colW[0] - 4);
+          const evLines = doc.splitTextToSize(evidenceText, colW[1] - 4);
+          const lastLines = doc.splitTextToSize(lastColText, colW[4] - 4);
+          const maxLines = Math.max(curLines.length, evLines.length, lastLines.length, 1);
+          const rowHeight = Math.max(maxLines * 4 + 3, 7.5);
+
+          // Check for page break
+          if (yPos + rowHeight > pageHeight - 25) {
+            doc.addPage();
+            renderHeader(false);
+            yPos = 16;
+
+            // Re-draw table header on new page
+            doc.setFillColor(isApprovedTable ? 37 : 185, isApprovedTable ? 99 : 28, isApprovedTable ? 235 : 28);
+            doc.rect(margin, yPos, contentWidth, 7, 'F');
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(7.5);
+            doc.setTextColor(255, 255, 255);
+            let reX = margin;
+            headers.forEach((h, idx) => {
+              const align = (idx === 2 || idx === 3 || (isApprovedTable && idx === 4)) ? 'center' : 'left';
+              const textX = align === 'center' ? reX + (colW[idx] / 2) : reX + 2;
+              doc.text(h, textX, yPos + 4.8, { align });
+              reX += colW[idx];
+            });
+            yPos += 7;
+          }
+
+          // Alternating background
+          if (rowIdx % 2 === 0) {
+            doc.setFillColor(248, 250, 252);
+            doc.rect(margin, yPos, contentWidth, rowHeight, 'F');
+          }
+
+          // Draw border
+          doc.setDrawColor(226, 232, 240);
+          doc.rect(margin, yPos, contentWidth, rowHeight, 'S');
+
+          // Render columns
+          let colX = margin;
+
+          // Col 0: Curriculum Subject (Code in bold, title normal)
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(7.5);
+          doc.setTextColor(isApprovedTable ? 29 : 153, isApprovedTable ? 78 : 27, isApprovedTable ? 216 : 27);
+          doc.text(curCode, colX + 2, yPos + 3.8);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(51, 65, 85);
+          const remainingCurLines = doc.splitTextToSize(curTitle, colW[0] - 4);
+          remainingCurLines.forEach((line, li) => {
+            doc.text(line, colX + 2, yPos + 7.5 + (li * 3.5));
           });
-          xPosition += colWidths[idx];
+          colX += colW[0];
+
+          // Col 1: Matched Evidence
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(15, 23, 42);
+          evLines.forEach((line, li) => {
+            doc.text(line, colX + 2, yPos + 4 + (li * 3.5));
+          });
+          colX += colW[1];
+
+          // Col 2: Units
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(15, 23, 42);
+          doc.text(curUnits, colX + (colW[2] / 2), yPos + (rowHeight / 2) + 1.2, { align: 'center' });
+          colX += colW[2];
+
+          // Col 3: Source Badge
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(match.source === 'tor' ? 146 : 107, match.source === 'tor' ? 64 : 33, match.source === 'tor' ? 14 : 168);
+          doc.text(sourceText, colX + (colW[3] / 2), yPos + (rowHeight / 2) + 1.2, { align: 'center' });
+          colX += colW[3];
+
+          // Col 4: Confidence or Rejection Note
+          if (isApprovedTable) {
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(22, 101, 52);
+            doc.text(`${match.confidence.toFixed(0)}%`, colX + (colW[4] / 2), yPos + (rowHeight / 2) + 1.2, { align: 'center' });
+          } else {
+            doc.setFont('helvetica', 'italic');
+            doc.setTextColor(153, 27, 27);
+            lastLines.forEach((line, li) => {
+              doc.text(line, colX + 2, yPos + 4 + (li * 3.5));
+            });
+          }
+
+          yPos += rowHeight;
         });
 
-        // Draw borders
-        doc.setDrawColor(200, 200, 200);
-        xPosition = margin;
-        headers.forEach((_, idx) => {
-          doc.rect(xPosition, yPosition - 5, colWidths[idx], 8);
-          xPosition += colWidths[idx];
-        });
+        yPos += 8;
+      };
 
-        yPosition += 8;
-      });
+      // Draw Approved Table
+      drawTableSection('Approved Curriculum Subjects', approved, true);
 
-      // Add summary footer
-      yPosition += 5;
-      const totalUnits = approved.reduce((sum, match) => sum + (match.curriculum_subject?.units || 0), 0);
-      doc.setFont(undefined, 'bold');
-      doc.setFontSize(11);
-      doc.text(`Total Approved Subjects: ${approved.length}`, margin, yPosition);
-      yPosition += 7;
-      doc.text(`Total Units: ${totalUnits}`, margin, yPosition);
+      // Draw Rejected Table
+      drawTableSection('Rejected / Unaccredited Matches', rejected, false);
+
+      // Signature & Official Sign-off Box
+      if (yPos > pageHeight - 38) {
+        doc.addPage();
+        renderHeader(false);
+        yPos = 16;
+      }
+
+      yPos += 4;
+      const sigWidth = (contentWidth - 20) / 2;
+
+      // Evaluator signature
+      doc.setDrawColor(148, 163, 184);
+      doc.setLineWidth(0.4);
+      doc.line(margin + 5, yPos + 18, margin + 5 + sigWidth, yPos + 18);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text('DEPARTMENT CHAIR / EVALUATOR', margin + 5, yPos + 22);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text('ETEEAP Evaluation Committee', margin + 5, yPos + 26);
+
+      // Dean signature
+      const sig2X = margin + sigWidth + 15;
+      doc.line(sig2X, yPos + 18, sig2X + sigWidth, yPos + 18);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text('COLLEGE DEAN', sig2X, yPos + 22);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text('College of Computer Studies', sig2X, yPos + 26);
+
+      // Footer with page numbering
+      const totalPages = doc.internal.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(148, 163, 184);
+        doc.text(
+          `Cebu Institute of Technology - University · ETEEAP ACCREDIA System · Page ${i} of ${totalPages}`,
+          pageWidth / 2,
+          pageHeight - 6,
+          { align: 'center' }
+        );
+      }
 
       // Save PDF
-      doc.save(`approved-subjects-${application?.id || 'report'}.pdf`);
-      toast.success('PDF downloaded successfully');
+      const safeName = (applicantName || 'applicant')
+        .replace(/[^a-zA-Z0-9-_ ]/g, '')
+        .replace(/\s+/g, '-')
+        .toLowerCase();
+      doc.save(`eteeap-accreditation-report-${safeName}-${application?.id?.slice(0, 8) || 'summary'}.pdf`);
+      toast.success('Official Accreditation PDF downloaded successfully');
     } catch (error) {
       console.error('Error downloading PDF:', error);
-      toast.error('Failed to download PDF');
+      toast.error('Failed to generate PDF: ' + error.message);
     }
   };
 
@@ -238,6 +508,21 @@ export const EvaluatorReviewPage = () => {
       loadData();
     } catch (err) {
       toast.error('Failed');
+    }
+  };
+
+  const handleRemoveMatch = async () => {
+    if (!removeMatchId) return;
+    setActioning(true);
+    try {
+      await subjectMatchApi.delete(removeMatchId);
+      toast.success('Subject match removed');
+      setRemoveMatchId(null);
+      await loadData();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to remove subject match');
+    } finally {
+      setActioning(false);
     }
   };
 
@@ -415,20 +700,41 @@ export const EvaluatorReviewPage = () => {
   const workMatches = matches.filter(m => m.source === 'work_experience' && m.curriculum_subject);
   const allMatchedItems = matches.filter(m => m.curriculum_subject);
   
-  // Find unmatched curriculum subjects
-  const matchedCurriculumIds = new Set(allMatchedItems.map(m => m.curriculum_subject?.id));
-  const unmatchedCurriculum = (curriculum || []).filter(c => !matchedCurriculumIds.has(c.id));
-  
-  // Find TOR subjects that are already matched to a curriculum subject (excluding rejected matches)
-  const matchedTorSubjectIds = new Set(
+  // Find approved IDs across this application (to enforce 1-to-1 matching)
+  const approvedTorSubjectIds = new Set(
     matches
-      .filter(m => m.tor_subject && m.curriculum_subject && m.status !== 'rejected')
+      .filter(m => m.tor_subject && m.status === 'approved')
       .map(m => m.tor_subject.id)
   );
 
-  // Available TOR subjects left after matching (to display in dropdown)
+  const approvedWorkExpIds = new Set(
+    matches
+      .filter(m => m.work_experience && m.status === 'approved')
+      .map(m => m.work_experience.id)
+  );
+
+  const approvedCurriculumIds = new Set(
+    matches
+      .filter(m => m.curriculum_subject && m.status === 'approved')
+      .map(m => m.curriculum_subject.id)
+  );
+
+  // Find unmatched curriculum subjects: subjects with no match or only rejected matches, and not approved
+  const matchedCurriculumIds = new Set(
+    matches
+      .filter(m => m.curriculum_subject && m.status !== 'rejected')
+      .map(m => m.curriculum_subject.id)
+  );
+  const unmatchedCurriculum = (curriculum || []).filter(c => !matchedCurriculumIds.has(c.id) && !approvedCurriculumIds.has(c.id));
+  
+  // Available TOR subjects not yet approved for any curriculum subject
   const availableTorSubjects = (application?.tor_subjects || []).filter(
-    s => !matchedTorSubjectIds.has(s.id)
+    s => !approvedTorSubjectIds.has(s.id)
+  );
+
+  // Available Work Experiences not yet approved for any curriculum subject
+  const availableWorkExperiences = (application?.work_experiences || []).filter(
+    w => !approvedWorkExpIds.has(w.id)
   );
 
   const isFinalized = application?.status === 'finalized' || application?.status === 'rejected';
@@ -437,183 +743,272 @@ export const EvaluatorReviewPage = () => {
     <div className="min-h-screen bg-gray-50">
       <Navbar />
       
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" data-testid="evaluator-review-page">
+      <div className="max-w-[1600px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8" data-testid="evaluator-review-page">
         {/* Finalization Complete Summary */}
-        {finalizationComplete && (
-          <div className="mb-8">
-            <Card className="p-8 border-green-200 bg-gradient-to-br from-green-50 to-emerald-50">
-              <div className="text-center mb-6">
-                <CheckCircle2 className="w-16 h-16 text-green-600 mx-auto mb-3" />
-                <h2 className="font-serif text-3xl font-bold text-green-900 mb-2">Accreditation Complete!</h2>
-                <p className="text-green-700">All approvals have been recorded. Below is a summary of the credited subjects.</p>
-              </div>
+        {finalizationComplete && !showFullReview && (
+          <div className="space-y-6">
+            {/* Top Navigation */}
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <Button
+                variant="ghost"
+                onClick={() => navigate('/evaluator')}
+                className="text-gray-600 hover:text-gray-900 -ml-2"
+                data-testid="back-to-queue-btn"
+              >
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back to Review Queue
+              </Button>
+            </div>
 
-              {/* Approved Subjects Summary */}
-              <div className="space-y-4 mb-6">
-                {(() => {
-                  const approved = matches.filter(m => m.status === 'approved');
-                  const torApproved = approved.filter(m => m.source === 'tor');
-                  const workApproved = approved.filter(m => m.source === 'work_experience');
-                  const totalUnits = approved.reduce((sum, m) => sum + (m.curriculum_subject?.units || 0), 0);
+            {/* Hero Header Card */}
+            <Card className="p-6 bg-white border border-gray-200 shadow-xs rounded-xl">
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+                <div>
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 mb-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    Accreditation Finalized & Certified
+                  </div>
+                  <h1 className="font-serif text-2xl sm:text-3xl font-bold text-gray-900">
+                    Official Accreditation Summary
+                  </h1>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Candidate: <strong className="text-gray-800">{application?.applicant?.full_name || `${application?.applicant?.first_name || ''} ${application?.applicant?.last_name || ''}`.trim() || 'Applicant'}</strong>
+                    {' '}· Program: <span className="font-medium text-maroon">{application?.program?.code || 'BSIT'}</span> - {application?.program?.name || 'Bachelor of Science in Information Technology'}
+                    {' '}· Application <span className="font-mono text-gray-500">#{application?.id?.slice(0, 8)}</span>
+                  </p>
+                </div>
 
-                  return (
-                    <>
-                      <div className="grid grid-cols-3 gap-4 mb-4">
-                        <Card className="p-4 bg-white border-green-200">
-                          <div className="text-3xl font-bold text-green-600">{approved.length}</div>
-                          <div className="text-sm text-gray-600">Total Approved Subjects</div>
-                        </Card>
-                        <Card className="p-4 bg-white border-green-200">
-                          <div className="text-3xl font-bold text-maroon">{totalUnits}</div>
-                          <div className="text-sm text-gray-600">Total Units Credited</div>
-                        </Card>
-                        <Card className="p-4 bg-white border-green-200">
-                          <div className="text-3xl font-bold text-blue-600">{torApproved.length + workApproved.length}</div>
-                          <div className="text-sm text-gray-600">Sources (TOR + Work)</div>
-                        </Card>
-                      </div>
-
-                      {/* TOR Subjects */}
-                      {torApproved.length > 0 && (
-                        <Card className="p-4 border-blue-200 bg-blue-50/50">
-                          <h3 className="font-serif font-semibold mb-3 flex items-center gap-2 text-blue-900">
-                            <FileText className="w-5 h-5" />
-                            From Transcript of Records ({torApproved.length})
-                          </h3>
-                          <div className="space-y-2">
-                            {torApproved.map((match) => (
-                              <div key={match.id} className="bg-white rounded p-3 border border-blue-100">
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="flex-1">
-                                    <div className="font-semibold text-gray-900">
-                                      {match.curriculum_subject?.code}
-                                    </div>
-                                    <div className="text-sm text-gray-700">{match.curriculum_subject?.title}</div>
-                                    {match.tor_subject && (
-                                      <div className="text-xs text-gray-600 mt-1">
-                                        From: {match.tor_subject.code} - {match.tor_subject.title}
-                                      </div>
-                                    )}
-                                  </div>
-                                  <div className="text-right flex-shrink-0">
-                                    <Badge className="bg-green-100 text-green-700 text-xs mb-1 block">
-                                      {match.confidence.toFixed(0)}% match
-                                    </Badge>
-                                    <div className="text-sm font-semibold text-maroon">{match.curriculum_subject?.units}u</div>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </Card>
-                      )}
-
-                      {/* Work Experience Subjects */}
-                      {workApproved.length > 0 && (
-                        <Card className="p-4 border-purple-200 bg-purple-50/50">
-                          <h3 className="font-serif font-semibold mb-3 flex items-center gap-2 text-purple-900">
-                            <Briefcase className="w-5 h-5" />
-                            From Work Experience ({workApproved.length})
-                          </h3>
-                          <div className="space-y-2">
-                            {workApproved.map((match) => (
-                              <div key={match.id} className="bg-white rounded p-3 border border-purple-100">
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="flex-1">
-                                    <div className="font-semibold text-gray-900">
-                                      {match.curriculum_subject?.code}
-                                    </div>
-                                    <div className="text-sm text-gray-700">{match.curriculum_subject?.title}</div>
-                                    {match.work_experience && (
-                                      <div className="text-xs text-gray-600 mt-1">
-                                        From: {match.work_experience.job_title} at {match.work_experience.company_name}
-                                      </div>
-                                    )}
-                                  </div>
-                                  <div className="text-right flex-shrink-0">
-                                    <Badge className="bg-green-100 text-green-700 text-xs mb-1 block">
-                                      {match.confidence.toFixed(0)}% match
-                                    </Badge>
-                                    <div className="text-sm font-semibold text-maroon">{match.curriculum_subject?.units}u</div>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </Card>
-                      )}
-
-                      {/* Rejected Subjects */}
-                      {(() => {
-                        const rejected = matches.filter(m => m.status === 'rejected');
-                        return rejected.length > 0 ? (
-                          <Card className="p-4 border-red-200 bg-red-50/50">
-                            <h3 className="font-serif font-semibold mb-3 flex items-center gap-2 text-red-900">
-                              <XCircle className="w-5 h-5" />
-                              Rejected Subjects ({rejected.length})
-                            </h3>
-                            <div className="space-y-2">
-                              {rejected.map((match) => (
-                                <div key={match.id} className="bg-white rounded p-3 border border-red-100">
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div className="flex-1">
-                                      <div className="font-semibold text-gray-900">
-                                        {match.curriculum_subject?.code || 'No Match'}
-                                      </div>
-                                      <div className="text-sm text-gray-700">{match.curriculum_subject?.title}</div>
-                                      {match.evaluator_note && (
-                                        <div className="text-xs text-red-700 mt-1 italic">
-                                          Reason: {match.evaluator_note}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </Card>
-                        ) : null;
-                      })()}
-                    </>
-                  );
-                })()}
-              </div>
-
-              <div className="flex gap-3 justify-center flex-wrap">
-                <Button 
-                  onClick={() => navigate('/evaluator')}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 flex items-center gap-2"
-                >
-                  <Home className="w-4 h-4" />
-                  Dashboard
-                </Button>
-                <Button 
-                  onClick={() => navigate('/evaluator')}
-                  className="bg-green-600 hover:bg-green-700 text-white px-6"
-                >
-                  Return to Queue
-                </Button>
-                <Button 
-                  onClick={handleReopen}
-                  disabled={actioning}
-                  className="bg-maroon text-white px-6"
-                >
-                  {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-                  Move to Under Review
-                </Button>
-                <Button 
-                  onClick={() => navigate(`/evaluator/review/${id}`)}
-                  variant="outline"
-                  className="px-6"
-                >
-                  View Full Details
-                </Button>
+                {/* Primary Actions */}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Button
+                    onClick={downloadApprovedAsPDF}
+                    className="bg-maroon hover:bg-maroon/90 text-white font-semibold px-5 py-2.5 shadow-xs flex items-center gap-2"
+                    data-testid="download-pdf-btn"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download Official PDF Report
+                  </Button>
+                  <Button
+                    onClick={() => setShowFullReview(true)}
+                    variant="outline"
+                    className="border-gray-300 text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                    data-testid="toggle-audit-view-btn"
+                  >
+                    <Eye className="w-4 h-4" />
+                    Full Audit View
+                  </Button>
+                  <Button
+                    onClick={handleReopen}
+                    disabled={actioning}
+                    variant="outline"
+                    className="border-amber-300 text-amber-900 hover:bg-amber-50 flex items-center gap-2"
+                    data-testid="reopen-for-edit-btn"
+                  >
+                    {actioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4 text-amber-700" />}
+                    Reopen for Revision
+                  </Button>
+                </div>
               </div>
             </Card>
+
+            {/* Key Metric Stats Cards */}
+            {(() => {
+              const approved = matches.filter(m => m.status === 'approved');
+              const rejected = matches.filter(m => m.status === 'rejected');
+              const torApproved = approved.filter(m => m.source === 'tor');
+              const workApproved = approved.filter(m => m.source === 'work_experience');
+              const totalUnits = approved.reduce((sum, m) => sum + (m.curriculum_subject?.units || 0), 0);
+
+              return (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <Card className="p-5 bg-white border border-gray-200 shadow-xs rounded-xl flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 flex-shrink-0">
+                        <CheckCircle2 className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold text-gray-900">{approved.length}</div>
+                        <div className="text-xs text-gray-500 font-medium">Subjects Credited & Approved</div>
+                      </div>
+                    </Card>
+
+                    <Card className="p-5 bg-white border border-gray-200 shadow-xs rounded-xl flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-center text-maroon flex-shrink-0">
+                        <BookOpen className="w-6 h-6 text-maroon" />
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold text-maroon">{totalUnits} Units</div>
+                        <div className="text-xs text-gray-500 font-medium">Total Academic Units Credited</div>
+                      </div>
+                    </Card>
+
+                    <Card className="p-5 bg-white border border-gray-200 shadow-xs rounded-xl flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 flex-shrink-0">
+                        <FileText className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <div className="text-2xl font-bold text-blue-900">{torApproved.length} TOR · {workApproved.length} Work</div>
+                        <div className="text-xs text-gray-500 font-medium">Credited Evidence Distribution</div>
+                      </div>
+                    </Card>
+                  </div>
+
+                  {/* Clean Approved Subjects Table */}
+                  <Card className="bg-white border border-gray-200 shadow-xs rounded-xl overflow-hidden">
+                    <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                        <h2 className="font-semibold text-gray-900">
+                          Credited Curriculum Subjects ({approved.length})
+                        </h2>
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        Showing all verified & approved curriculum equivalencies
+                      </span>
+                    </div>
+
+                    {approved.length === 0 ? (
+                      <div className="p-8 text-center text-gray-500 text-sm">
+                        No approved subjects recorded for this application.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                          <thead>
+                            <tr className="border-b border-gray-200 bg-gray-50 text-xs font-semibold uppercase tracking-wider text-gray-600">
+                              <th className="py-3 px-4 w-12 text-center">#</th>
+                              <th className="py-3 px-4">BSIT Curriculum Subject</th>
+                              <th className="py-3 px-4">Matched Applicant Evidence</th>
+                              <th className="py-3 px-4 text-center w-20">Units</th>
+                              <th className="py-3 px-4 text-center w-28">Source</th>
+                              <th className="py-3 px-4 text-center w-28">Match</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {approved.map((match, idx) => (
+                              <tr key={match.id} className="hover:bg-gray-50/60 transition-colors">
+                                <td className="py-3.5 px-4 text-center text-xs font-medium text-gray-400">
+                                  {idx + 1}
+                                </td>
+                                <td className="py-3.5 px-4">
+                                  <div className="font-mono font-bold text-maroon text-sm">
+                                    {match.curriculum_subject?.code}
+                                  </div>
+                                  <div className="text-gray-900 font-medium text-xs mt-0.5">
+                                    {match.curriculum_subject?.title}
+                                  </div>
+                                </td>
+                                <td className="py-3.5 px-4">
+                                  {match.source === 'tor' && match.tor_subject ? (
+                                    <div className="space-y-0.5">
+                                      <div className="font-semibold text-gray-900 text-xs">
+                                        <span className="font-mono text-blue-700 font-bold mr-1">{match.tor_subject.code}</span>
+                                        {match.tor_subject.title}
+                                      </div>
+                                      <div className="text-[11px] text-gray-500 flex items-center gap-2 flex-wrap">
+                                        <span>Units: <strong>{match.tor_subject.units || 0}u</strong></span>
+                                        <span>·</span>
+                                        <span>Grade: <strong>{match.tor_subject.grade || 'Passed'}</strong></span>
+                                      </div>
+                                    </div>
+                                  ) : match.source === 'work_experience' && match.work_experience ? (
+                                    <div className="space-y-0.5">
+                                      <div className="font-semibold text-purple-900 text-xs">
+                                        {match.work_experience.job_title}
+                                      </div>
+                                      <div className="text-[11px] text-gray-500">
+                                        {match.work_experience.company_name} ({match.work_experience.years || 0} yrs)
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <span className="text-xs text-gray-400 italic">No direct evidence details</span>
+                                  )}
+                                </td>
+                                <td className="py-3.5 px-4 text-center">
+                                  <span className="font-bold text-gray-900 text-xs bg-gray-100 px-2 py-0.5 rounded">
+                                    {match.curriculum_subject?.units || 0}u
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-4 text-center">
+                                  <Badge className={match.source === 'tor' ? 'bg-blue-50 text-blue-700 border-blue-200 text-xs' : 'bg-purple-50 text-purple-700 border-purple-200 text-xs'}>
+                                    {match.source === 'tor' ? '📄 TOR' : '💼 Work Exp'}
+                                  </Badge>
+                                </td>
+                                <td className="py-3.5 px-4 text-center">
+                                  <Badge className={getConfidenceColor(match.confidence)}>
+                                    {match.confidence.toFixed(0)}% match
+                                  </Badge>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </Card>
+
+                  {/* Evaluator Notes / Committee Sign-Off */}
+                  <Card className="p-5 bg-white border border-gray-200 shadow-xs rounded-xl">
+                    <h3 className="font-semibold text-gray-900 text-sm mb-2 flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-maroon" />
+                      Department Chair & Committee Endorsement
+                    </h3>
+                    {application?.evaluator_note ? (
+                      <p className="text-sm text-gray-700 bg-gray-50 p-3 rounded border border-gray-200 italic">
+                        "{application.evaluator_note}"
+                      </p>
+                    ) : (
+                      <p className="text-xs text-gray-500 italic">
+                        This accreditation decision has been officially approved and recorded under the CIT-U ETEEAP Guidelines.
+                      </p>
+                    )}
+                  </Card>
+
+                  {/* Bottom Navigation Actions */}
+                  <div className="flex items-center justify-between flex-wrap gap-4 pt-4 border-t border-gray-200">
+                    <Button
+                      onClick={() => navigate('/evaluator')}
+                      variant="outline"
+                      className="px-6 border-gray-300 text-gray-700 hover:bg-gray-50"
+                    >
+                      <ArrowLeft className="w-4 h-4 mr-2" />
+                      Return to Evaluator Queue
+                    </Button>
+
+                    <div className="flex items-center gap-3">
+                      <Button
+                        onClick={downloadApprovedAsPDF}
+                        className="bg-maroon hover:bg-maroon/90 text-white font-semibold px-6 shadow-xs flex items-center gap-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download Official PDF Report
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         )}
 
-        {!finalizationComplete && (
+        {/* If in Audit Review Mode while Finalized */}
+        {finalizationComplete && showFullReview && (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2 text-sm text-amber-900 font-medium">
+              <AlertCircle className="w-4 h-4 text-amber-700" />
+              <span>Viewing in Audit Mode (Application is Finalized & Certified)</span>
+            </div>
+            <Button
+              onClick={() => setShowFullReview(false)}
+              className="bg-maroon text-white text-xs px-4"
+              data-testid="exit-audit-view-btn"
+            >
+              Back to Summary View
+            </Button>
+          </div>
+        )}
+
+        {(!finalizationComplete || showFullReview) && (
           <>
         {/* Header */}
         <div className="mb-6">
@@ -634,9 +1029,9 @@ export const EvaluatorReviewPage = () => {
           </div>
         </div>
 
-        <div className="grid lg:grid-cols-3 gap-6">
+        <div className="grid lg:grid-cols-12 gap-6">
           {/* Left: Applicant Info & Documents */}
-          <div className="lg:col-span-1 space-y-4">
+          <div className="lg:col-span-4 xl:col-span-3 space-y-4">
             <Card className="p-5 border-gray-200">
               <h3 className="font-serif font-semibold mb-3 flex items-center gap-2">
                 <User className="w-4 h-4 text-maroon" />
@@ -749,7 +1144,7 @@ export const EvaluatorReviewPage = () => {
           </div>
 
           {/* Right: Matches */}
-          <div className="lg:col-span-2 space-y-4">
+          <div className="lg:col-span-8 xl:col-span-9 space-y-4">
             <Card className="p-5 border-gray-200">
               <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                 <h3 className="font-serif font-semibold text-lg flex items-center gap-2">
@@ -822,8 +1217,8 @@ export const EvaluatorReviewPage = () => {
                       curriculum={curriculum}
                       documents={application?.documents || []}
                       onOpenTorEvidence={setTorEvidenceMatch}
-                      torSubjects={application?.tor_subjects || []}
-                      workExperiences={application?.work_experiences || []}
+                      torSubjects={availableTorSubjects}
+                      workExperiences={availableWorkExperiences}
                     />
                   </TabsContent>
                   <TabsContent value="tor">
@@ -836,8 +1231,8 @@ export const EvaluatorReviewPage = () => {
                       curriculum={curriculum}
                       documents={application?.documents || []}
                       onOpenTorEvidence={setTorEvidenceMatch}
-                      torSubjects={application?.tor_subjects || []}
-                      workExperiences={application?.work_experiences || []}
+                      torSubjects={availableTorSubjects}
+                      workExperiences={availableWorkExperiences}
                     />
                   </TabsContent>
                   <TabsContent value="work">
@@ -850,8 +1245,8 @@ export const EvaluatorReviewPage = () => {
                       curriculum={curriculum}
                       documents={application?.documents || []}
                       onOpenTorEvidence={setTorEvidenceMatch}
-                      torSubjects={application?.tor_subjects || []}
-                      workExperiences={application?.work_experiences || []}
+                      torSubjects={availableTorSubjects}
+                      workExperiences={availableWorkExperiences}
                     />
                   </TabsContent>
                 </div>
@@ -870,7 +1265,7 @@ export const EvaluatorReviewPage = () => {
                       key={curSubject.id}
                       curriculum={curSubject}
                       torSubjects={availableTorSubjects}
-                      workExperiences={application?.work_experiences || []}
+                      workExperiences={availableWorkExperiences}
                       applicationId={application?.id}
                       matches={matches}
                       onMatched={loadData}
@@ -883,8 +1278,24 @@ export const EvaluatorReviewPage = () => {
 
             {/* Action Panel */}
             {!isFinalized && (
-              <Card className="p-5 border-gray-200">
-                <h3 className="font-serif font-semibold mb-3">Department Chair Decision</h3>
+              <Card className="p-6 border-gray-200 shadow-sm">
+                <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                  <div>
+                    <h3 className="font-serif font-semibold text-xl text-gray-900">Department Chair Decision</h3>
+                    <p className="text-xs text-gray-600">Review approved subject accreditations, edit match mappings, or remove credited subjects before finalization.</p>
+                  </div>
+                  {matches.filter(m => m.status === 'approved').length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={downloadApprovedAsPDF}
+                      className="text-xs flex items-center gap-1.5"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Export PDF
+                    </Button>
+                  )}
+                </div>
                 
                 {/* Summary Preview */}
                 {(() => {
@@ -895,68 +1306,222 @@ export const EvaluatorReviewPage = () => {
                   if (approved.length > 0 || rejected.length > 0) {
                     return (
                       <div className="mb-6 space-y-4">
-                        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-                          <div className="mb-3">
-                            <h4 className="font-semibold text-blue-900 flex items-center gap-2">
-                              <CheckCircle2 className="w-4 h-4" />
-                              Approved Subjects ({approved.length})
-                            </h4>
-                          </div>
-                          <div className="overflow-x-auto max-h-64 overflow-y-auto border border-blue-100 rounded">
-                            <table className="w-full text-sm">
-                              <thead className="sticky top-0 bg-blue-100">
-                                <tr className="border-b border-blue-200">
-                                  <th className="text-left py-2 px-2 font-semibold text-blue-900">Code</th>
-                                  <th className="text-left py-2 px-2 font-semibold text-blue-900">Title</th>
-                                  <th className="text-center py-2 px-2 font-semibold text-blue-900">Units</th>
-                                  <th className="text-left py-2 px-2 font-semibold text-blue-900">Source</th>
-                                  <th className="text-center py-2 px-2 font-semibold text-blue-900">Confidence</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {approved.map((match) => (
-                                  <tr key={match.id} className="border-b border-blue-100 hover:bg-blue-100">
-                                    <td className="py-2 px-2 font-mono text-blue-700">{match.curriculum_subject?.code || 'N/A'}</td>
-                                    <td className="py-2 px-2">{match.curriculum_subject?.title || 'N/A'}</td>
-                                    <td className="py-2 px-2 text-center font-semibold">{match.curriculum_subject?.units || 0}</td>
-                                    <td className="py-2 px-2 text-xs">
-                                      <Badge variant="outline" className="text-xs">
-                                        {match.source === 'tor' ? 'TOR' : 'Work Exp'}
-                                      </Badge>
-                                    </td>
-                                    <td className="py-2 px-2 text-center">
-                                      <Badge className="bg-green-100 text-green-700 text-xs">{match.confidence.toFixed(0)}%</Badge>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
+                        {approved.length > 0 && (
+                          <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-5">
+                            <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
+                              <h4 className="font-semibold text-blue-950 flex items-center gap-2 text-base">
+                                <CheckCircle2 className="w-5 h-5 text-green-600" />
+                                Approved Subjects ({approved.length})
+                              </h4>
+                              <span className="text-xs text-blue-800 bg-blue-100/80 px-2.5 py-1 rounded-full font-medium">
+                                Total Credits: {approved.reduce((acc, m) => acc + Number(m.curriculum_subject?.units || 0), 0)} units
+                              </span>
+                            </div>
 
-                        {rejected.length > 0 && (
-                          <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-                            <h4 className="font-semibold text-red-900 mb-3 flex items-center gap-2">
-                              <XCircle className="w-4 h-4" />
-                              Rejected Subjects ({rejected.length})
-                            </h4>
-                            <div className="overflow-x-auto max-h-64 overflow-y-auto border border-red-100 rounded">
+                            <div className="overflow-x-auto border border-blue-200 rounded-lg bg-white shadow-sm">
                               <table className="w-full text-sm">
-                                <thead className="sticky top-0 bg-red-100">
-                                  <tr className="border-b border-red-200">
-                                    <th className="text-left py-2 px-2 font-semibold text-red-900">Code</th>
-                                    <th className="text-left py-2 px-2 font-semibold text-red-900">Title</th>
-                                    <th className="text-left py-2 px-2 font-semibold text-red-900">Reason</th>
+                                <thead className="bg-blue-100/80 border-b border-blue-200 text-blue-900 text-xs font-semibold uppercase tracking-wider">
+                                  <tr>
+                                    <th className="text-left py-3 px-3 w-[22%]">BSIT Curriculum Subject</th>
+                                    <th className="text-left py-3 px-3 w-[36%]">Applicant Subject / Evidence</th>
+                                    <th className="text-center py-3 px-2 w-[8%]">Units</th>
+                                    <th className="text-center py-3 px-2 w-[10%]">Source</th>
+                                    <th className="text-center py-3 px-2 w-[10%]">Confidence</th>
+                                    <th className="text-center py-3 px-3 w-[14%]">Actions</th>
                                   </tr>
                                 </thead>
-                                <tbody>
-                                  {rejected.map((match) => (
-                                    <tr key={match.id} className="border-b border-red-100 hover:bg-red-100">
-                                      <td className="py-2 px-2 font-mono text-red-700">{match.curriculum_subject?.code || 'N/A'}</td>
-                                      <td className="py-2 px-2">{match.curriculum_subject?.title || 'N/A'}</td>
-                                      <td className="py-2 px-2 text-xs italic text-red-800">{match.evaluator_note || 'No reason provided'}</td>
+                                <tbody className="divide-y divide-blue-100/70">
+                                  {approved.map((match) => (
+                                    <tr key={match.id} className="hover:bg-blue-50/40 transition-colors">
+                                      <td className="py-3 px-3 align-top">
+                                        <div className="font-mono font-bold text-blue-700 text-sm">{match.curriculum_subject?.code || 'N/A'}</div>
+                                        <div className="text-xs text-gray-800 font-medium leading-relaxed">{match.curriculum_subject?.title || 'N/A'}</div>
+                                      </td>
+                                      <td className="py-3 px-3 align-top">
+                                        {match.tor_subject ? (
+                                          <div className="bg-amber-50/80 border border-amber-200 rounded-md p-2">
+                                            <div className="font-semibold text-amber-900 text-xs">
+                                              {match.tor_subject.code} - {match.tor_subject.title}
+                                            </div>
+                                            <div className="text-amber-800 text-[11px] mt-0.5 flex items-center gap-2">
+                                              <span>Units: <strong>{match.tor_subject.units || 0}u</strong></span>
+                                              <span>•</span>
+                                              <span>Grade: <strong>{match.tor_subject.grade || 'N/A'}</strong></span>
+                                            </div>
+                                          </div>
+                                        ) : match.work_experience ? (
+                                          <div className="bg-purple-50/80 border border-purple-200 rounded-md p-2">
+                                            <div className="font-semibold text-purple-900 text-xs">
+                                              💼 {match.work_experience.job_title}
+                                            </div>
+                                            <div className="text-purple-800 text-[11px] mt-0.5">
+                                              {match.work_experience.company_name || 'Industry Experience'} · {match.work_experience.years || 0} yrs
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <span className="text-gray-400 italic text-xs">No evidence recorded</span>
+                                        )}
+                                        {match.evaluator_note && (
+                                          <div className="text-[11px] text-gray-600 italic mt-1 bg-gray-50 p-1 rounded border border-gray-100">
+                                            <strong>Remarks:</strong> {match.evaluator_note}
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td className="py-3 px-2 align-middle text-center font-bold text-gray-800 text-sm">
+                                        {match.curriculum_subject?.units || 0}
+                                      </td>
+                                      <td className="py-3 px-2 align-middle text-center">
+                                        <Badge variant="outline" className={`text-[11px] font-medium ${match.source === 'tor' ? 'border-amber-300 text-amber-800 bg-amber-50' : 'border-purple-300 text-purple-800 bg-purple-50'}`}>
+                                          {match.source === 'tor' ? '📜 TOR' : '💼 Work'}
+                                        </Badge>
+                                      </td>
+                                      <td className="py-3 px-2 align-middle text-center">
+                                        <Badge className="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5">
+                                          {match.confidence.toFixed(0)}%
+                                        </Badge>
+                                      </td>
+                                      <td className="py-3 px-3 align-middle text-center">
+                                        <div className="flex items-center justify-center gap-1.5 flex-nowrap">
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-7 px-2.5 text-xs text-blue-700 bg-blue-50/70 hover:bg-blue-100 border-blue-200 font-medium"
+                                            onClick={() => setEditingMatch(match)}
+                                            title="Edit or reassign this subject match"
+                                          >
+                                            <Pencil className="w-3 h-3 mr-1 text-blue-600" />
+                                            Edit
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-7 px-2.5 text-xs text-red-700 bg-red-50/70 hover:bg-red-100 border-red-200 font-medium"
+                                            onClick={() => setRemoveMatchId(match.id)}
+                                            title="Remove this subject match"
+                                          >
+                                            <Trash2 className="w-3 h-3 mr-1 text-red-600" />
+                                            Remove
+                                          </Button>
+                                        </div>
+                                      </td>
                                     </tr>
                                   ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {rejected.length > 0 && (
+                          <div className="rounded-xl border border-red-200 bg-red-50/70 p-5">
+                            <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
+                              <h4 className="font-semibold text-red-950 flex items-center gap-2 text-base">
+                                <XCircle className="w-5 h-5 text-red-600" />
+                                Rejected Subjects ({rejected.length})
+                              </h4>
+                              <span className="text-xs text-red-800 bg-red-100/80 px-2.5 py-1 rounded-full font-medium">
+                                Not Credited
+                              </span>
+                            </div>
+
+                            <div className="overflow-x-auto border border-red-200 rounded-lg bg-white shadow-sm">
+                              <table className="w-full text-sm">
+                                <thead className="bg-red-100/80 border-b border-red-200 text-red-900 text-xs font-semibold uppercase tracking-wider">
+                                  <tr>
+                                    <th className="text-left py-3 px-3 w-[22%]">BSIT Curriculum Subject</th>
+                                    <th className="text-left py-3 px-3 w-[34%]">Attempted Applicant Subject / Evidence</th>
+                                    <th className="text-center py-3 px-2 w-[8%]">Units</th>
+                                    <th className="text-left py-3 px-3 w-[24%]">Reason for Rejection</th>
+                                    <th className="text-center py-3 px-3 w-[12%]">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-red-100/70">
+                                  {rejected.map((match) => {
+                                    const isInsufficientUnits = match.tor_subject && match.curriculum_subject && Number(match.tor_subject.units || 0) < Number(match.curriculum_subject.units || 0);
+                                    return (
+                                      <tr key={match.id} className="hover:bg-red-50/40 transition-colors">
+                                        <td className="py-3 px-3 align-top">
+                                          <div className="font-mono font-bold text-red-700 text-sm">{match.curriculum_subject?.code || 'N/A'}</div>
+                                          <div className="text-xs text-gray-800 font-medium leading-relaxed">{match.curriculum_subject?.title || 'N/A'}</div>
+                                        </td>
+                                        <td className="py-3 px-3 align-top">
+                                          {match.tor_subject ? (
+                                            <div className="bg-amber-50/80 border border-amber-200 rounded-md p-2">
+                                              <div className="font-semibold text-amber-900 text-xs">
+                                                {match.tor_subject.code} - {match.tor_subject.title}
+                                              </div>
+                                              <div className="text-amber-800 text-[11px] mt-0.5 flex items-center gap-2">
+                                                <span>Units: <strong>{match.tor_subject.units || 0}u</strong></span>
+                                                <span>•</span>
+                                                <span>Grade: <strong>{match.tor_subject.grade || 'N/A'}</strong></span>
+                                              </div>
+                                            </div>
+                                          ) : match.work_experience ? (
+                                            <div className="bg-purple-50/80 border border-purple-200 rounded-md p-2">
+                                              <div className="font-semibold text-purple-900 text-xs">
+                                                💼 {match.work_experience.job_title}
+                                              </div>
+                                              <div className="text-purple-800 text-[11px] mt-0.5">
+                                                {match.work_experience.company_name || 'Industry Experience'} · {match.work_experience.years || 0} yrs
+                                              </div>
+                                            </div>
+                                          ) : (
+                                            <span className="text-gray-400 italic text-xs">No specific applicant subject mapped</span>
+                                          )}
+                                        </td>
+                                        <td className="py-3 px-2 align-middle text-center font-bold text-gray-800 text-sm">
+                                          {match.curriculum_subject?.units || 0}
+                                        </td>
+                                        <td className="py-3 px-3 align-top">
+                                          <div className="space-y-1">
+                                            {isInsufficientUnits && (
+                                              <div className="text-[11px] font-semibold text-red-800 bg-red-100/90 border border-red-200 rounded px-2 py-1 flex items-center gap-1">
+                                                <AlertCircle className="w-3 h-3 flex-shrink-0 text-red-600" />
+                                                <span>Insufficient Units ({match.tor_subject.units}u vs {match.curriculum_subject.units}u required)</span>
+                                              </div>
+                                            )}
+                                            {match.evaluator_note && (
+                                              <div className="text-xs text-red-900 italic bg-red-50/80 p-1.5 rounded border border-red-100">
+                                                <strong>Note:</strong> {match.evaluator_note}
+                                              </div>
+                                            )}
+                                            {!match.evaluator_note && !isInsufficientUnits && (
+                                              <span className="text-xs italic text-gray-500">Rejected by evaluator</span>
+                                            )}
+                                            {match.matching_reason && (
+                                              <div className="text-[10px] text-gray-500 italic mt-0.5">
+                                                AI note: {match.matching_reason}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </td>
+                                        <td className="py-3 px-3 align-middle text-center">
+                                          <div className="flex items-center justify-center gap-1.5 flex-nowrap">
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="h-7 px-2.5 text-xs text-blue-700 bg-blue-50/70 hover:bg-blue-100 border-blue-200 font-medium"
+                                              onClick={() => setEditingMatch(match)}
+                                              title="Reassign or edit this match"
+                                            >
+                                              <Pencil className="w-3 h-3 mr-1 text-blue-600" />
+                                              Edit
+                                            </Button>
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="h-7 px-2.5 text-xs text-red-700 bg-red-50/70 hover:bg-red-100 border-red-200 font-medium"
+                                              onClick={() => setRemoveMatchId(match.id)}
+                                              title="Remove this rejected record"
+                                            >
+                                              <Trash2 className="w-3 h-3 mr-1 text-red-600" />
+                                              Remove
+                                            </Button>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             </div>
@@ -1031,7 +1596,6 @@ export const EvaluatorReviewPage = () => {
         )}
       </div>
 
-      <ChatbotWidget />
       <DocumentPreviewModal 
         document={previewDoc} 
         open={!!previewDoc} 
@@ -1123,6 +1687,82 @@ export const EvaluatorReviewPage = () => {
       </Dialog>
 
       <Dialog
+        open={!!removeMatchId}
+        onOpenChange={(open) => !open && setRemoveMatchId(null)}
+      >
+        <DialogContent className="max-w-md" data-testid="remove-match-modal">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-700">
+              <Trash2 className="w-5 h-5 text-red-600" />
+              Remove Subject Match?
+            </DialogTitle>
+          </DialogHeader>
+          
+          {(() => {
+            const matchToRemove = matches.find(m => m.id === removeMatchId);
+            if (!matchToRemove) return null;
+            return (
+              <div className="space-y-3 py-2">
+                <p className="text-sm text-gray-600">
+                  Are you sure you want to remove this match from the Department Chair Decision summary? The BSIT curriculum subject will return to the Unmatched list, and the applicant's evidence will become available again.
+                </p>
+                <div className="p-3 bg-red-50/80 border border-red-200 rounded-lg text-xs space-y-1.5">
+                  <div>
+                    <span className="font-semibold text-red-950">BSIT Subject:</span>{' '}
+                    <span className="font-mono font-bold text-red-700">{matchToRemove.curriculum_subject?.code}</span> - {matchToRemove.curriculum_subject?.title} ({matchToRemove.curriculum_subject?.units}u)
+                  </div>
+                  <div>
+                    <span className="font-semibold text-red-950">Matched Evidence:</span>{' '}
+                    {matchToRemove.tor_subject ? (
+                      <span className="text-amber-900 font-medium">
+                        📜 {matchToRemove.tor_subject.code} - {matchToRemove.tor_subject.title} ({matchToRemove.tor_subject.units}u, Grade: {matchToRemove.tor_subject.grade || 'N/A'})
+                      </span>
+                    ) : matchToRemove.work_experience ? (
+                      <span className="text-purple-900 font-medium">
+                        💼 {matchToRemove.work_experience.job_title} at {matchToRemove.work_experience.company_name} ({matchToRemove.work_experience.years} yrs)
+                      </span>
+                    ) : (
+                      <span className="italic text-gray-500">None</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setRemoveMatchId(null)} disabled={actioning}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleRemoveMatch}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              disabled={actioning}
+              data-testid="confirm-remove-match-btn"
+            >
+              {actioning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              {actioning ? 'Removing...' : 'Confirm Remove'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <EditMatchModal
+        match={editingMatch}
+        open={!!editingMatch}
+        onClose={() => setEditingMatch(null)}
+        torSubjects={(application?.tor_subjects || []).filter(
+          s => !approvedTorSubjectIds.has(s.id) || (editingMatch?.tor_subject?.id === s.id)
+        )}
+        workExperiences={(application?.work_experiences || []).filter(
+          w => !approvedWorkExpIds.has(w.id) || (editingMatch?.work_experience?.id === w.id)
+        )}
+        documents={application?.documents || []}
+        onPreviewTor={openDocumentPreview}
+        onSave={loadData}
+      />
+
+      <Dialog
         open={rejectDialogOpen}
         onOpenChange={(open) => {
           setRejectDialogOpen(open);
@@ -1144,11 +1784,68 @@ export const EvaluatorReviewPage = () => {
             <p className="text-sm text-gray-600">
               Enter a short reason why this subject match is being rejected. This note will be shown to the applicant in the View Evaluation page.
             </p>
+
+            {(() => {
+              const matchToReject = matches.find(m => m.id === rejectMatchId);
+              if (!matchToReject) return null;
+              const isInsufficientUnits = matchToReject.tor_subject && matchToReject.curriculum_subject && Number(matchToReject.tor_subject.units || 0) < Number(matchToReject.curriculum_subject.units || 0);
+
+              return (
+                <div className="p-3 bg-red-50/70 border border-red-200 rounded-lg text-xs space-y-1.5">
+                  <div>
+                    <span className="font-semibold text-red-950">BSIT Subject:</span>{' '}
+                    <span className="font-mono font-bold text-red-700">{matchToReject.curriculum_subject?.code}</span> - {matchToReject.curriculum_subject?.title} ({matchToReject.curriculum_subject?.units}u)
+                  </div>
+                  <div>
+                    <span className="font-semibold text-red-950">Attempted Match:</span>{' '}
+                    {matchToReject.tor_subject ? (
+                      <span className="text-amber-900 font-medium">
+                        📜 {matchToReject.tor_subject.code} - {matchToReject.tor_subject.title} ({matchToReject.tor_subject.units}u, Grade: {matchToReject.tor_subject.grade || 'N/A'})
+                      </span>
+                    ) : matchToReject.work_experience ? (
+                      <span className="text-purple-900 font-medium">
+                        💼 {matchToReject.work_experience.job_title} at {matchToReject.work_experience.company_name} ({matchToReject.work_experience.years}y)
+                      </span>
+                    ) : (
+                      <span className="italic text-gray-500">None</span>
+                    )}
+                  </div>
+                  {isInsufficientUnits && (
+                    <div className="text-red-700 font-semibold flex items-center gap-1 pt-0.5">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      <span>Note: Applicant subject has only {matchToReject.tor_subject.units} unit(s), but curriculum requires {matchToReject.curriculum_subject.units} unit(s).</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-gray-700">Quick Reason Presets:</label>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  'Insufficient units (applicant units < curriculum requirement)',
+                  'Course syllabus does not align with BSIT curriculum competencies',
+                  'Grade does not meet the minimum passing crediting requirement',
+                  'Incomplete course syllabus documentation / missing proof'
+                ].map((preset, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    className="text-[11px] bg-red-50 hover:bg-red-100 text-red-800 border border-red-200 rounded px-2 py-1 transition-colors text-left"
+                    onClick={() => setRejectReason(preset)}
+                  >
+                    + {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <Textarea
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="Example: TOR subject title does not align with the BSIT curriculum and the units are incomplete."
-              className="min-h-[140px]"
+              placeholder="Type reason or select a preset above..."
+              className="min-h-[100px] text-xs"
               data-testid="reject-reason-input"
             />
           </div>
@@ -1215,7 +1912,6 @@ export const EvaluatorReviewPage = () => {
                         key={doc.id}
                         onClick={() => {
                           openDocumentPreview(doc);
-                          // keep summary open while previewing
                         }}
                         className="w-full text-left rounded-md border border-gray-200 px-3 py-2 hover:border-maroon/40 hover:bg-maroon/5 transition-colors"
                       >
@@ -1247,6 +1943,212 @@ export const EvaluatorReviewPage = () => {
   );
 };
 
+const EditMatchModal = ({ match, open, onClose, torSubjects, workExperiences, documents, onPreviewTor, onSave }) => {
+  const [selectedSource, setSelectedSource] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (match) {
+      if (match.source === 'work_experience' && match.work_experience) {
+        setSelectedSource(`work:${match.work_experience.id}`);
+      } else if (match.tor_subject) {
+        setSelectedSource(`tor:${match.tor_subject.id}`);
+      } else {
+        setSelectedSource('');
+      }
+      setNote(match.evaluator_note || '');
+    }
+  }, [match]);
+
+  if (!match) return null;
+
+  const curSubj = match.curriculum_subject;
+  const curUnits = Number(curSubj?.units || 0);
+  const torDoc = (documents || []).find(d => d.document_type === 'tor') || (documents || [])[0];
+
+  const handleSave = async () => {
+    if (!selectedSource) {
+      toast.error('Please select an applicant subject or work experience.');
+      return;
+    }
+
+    const isWork = selectedSource.startsWith('work:');
+    const sourceId = selectedSource.replace(/^(tor|work):/, '');
+
+    // Check Rule 1: TOR subject units cannot be less than curriculum subject units
+    if (!isWork && curSubj) {
+      const chosenSubj = (torSubjects || []).find(s => String(s.id) === String(sourceId));
+      if (chosenSubj && Number(chosenSubj.units || 0) < curUnits) {
+        toast.error(`Cannot match: Applicant subject "${chosenSubj.code}" has ${chosenSubj.units} unit(s), but ${curSubj.code} requires ${curUnits} unit(s).`);
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      const payload = {
+        curriculum_subject_id: curSubj?.id,
+        note: note.trim(),
+        status: 'approved'
+      };
+      if (isWork) {
+        payload.work_experience_id = sourceId;
+        payload.tor_subject_id = null;
+      } else {
+        payload.tor_subject_id = sourceId;
+        payload.work_experience_id = null;
+      }
+
+      await subjectMatchApi.override(match.id, payload);
+      toast.success(`Match for "${curSubj?.code}" successfully updated!`);
+      if (onSave) {
+        await onSave();
+      }
+      onClose();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update match');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const hasTor = torSubjects && torSubjects.length > 0;
+  const hasWork = workExperiences && workExperiences.length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+      <DialogContent className="max-w-xl" data-testid="edit-match-modal">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-blue-900">
+            <Pencil className="w-5 h-5 text-blue-600" />
+            Edit Subject Match
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {/* Target BSIT Subject */}
+          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="text-xs font-semibold uppercase text-blue-700 mb-1">Target BSIT Curriculum Subject</div>
+            <div className="font-mono font-bold text-blue-950 text-base">{curSubj?.code}</div>
+            <div className="text-sm text-gray-800 font-medium">{curSubj?.title}</div>
+            <div className="text-xs text-blue-800 mt-1">Required Units: <strong>{curUnits}u</strong></div>
+          </div>
+
+          {/* Currently Assigned Evidence */}
+          <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="text-xs font-semibold uppercase text-gray-600">Currently Assigned Evidence</div>
+              {torDoc && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2.5 text-[11px] text-maroon hover:bg-maroon/10 border-maroon/40 flex items-center gap-1.5 font-medium bg-white shadow-xs"
+                  onClick={() => {
+                    if (onPreviewTor) {
+                      onPreviewTor(torDoc, match.tor_subject ? {
+                        code: match.tor_subject?.code,
+                        title: match.tor_subject?.title,
+                        grade: match.tor_subject?.grade,
+                        units: match.tor_subject?.units,
+                      } : null);
+                    }
+                  }}
+                  title="View uploaded Transcript of Records (TOR) with OCR match highlighting"
+                  data-testid="preview-applicant-tor-btn"
+                >
+                  <Eye className="w-3.5 h-3.5 text-maroon" />
+                  Preview Applicant TOR
+                </Button>
+              )}
+            </div>
+            {match.tor_subject ? (
+              <div className="text-xs text-gray-800">
+                <span className="font-semibold text-amber-900">📜 {match.tor_subject.code} - {match.tor_subject.title}</span>
+                <span className="ml-2">({match.tor_subject.units}u, Grade: {match.tor_subject.grade || 'N/A'})</span>
+              </div>
+            ) : match.work_experience ? (
+              <div className="text-xs text-purple-900 font-medium">
+                💼 {match.work_experience.job_title} at {match.work_experience.company_name} ({match.work_experience.years}y)
+              </div>
+            ) : (
+              <div className="text-xs text-gray-400 italic">None</div>
+            )}
+          </div>
+
+          {/* Reassign Evidence Dropdown */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-gray-700">
+              Select Matched Applicant Subject or Work Experience:
+            </label>
+            <select
+              className="w-full border border-gray-300 rounded-md p-2 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={selectedSource}
+              onChange={(e) => setSelectedSource(e.target.value)}
+              disabled={saving}
+            >
+              <option value="">Select subject or work experience...</option>
+              {hasTor && (
+                <optgroup label="📜 Applicant Scanned TOR Subjects">
+                  {torSubjects.map((s) => {
+                    const isInsufficient = Number(s.units || 0) < curUnits;
+                    return (
+                      <option
+                        key={s.id}
+                        value={`tor:${s.id}`}
+                        disabled={isInsufficient}
+                      >
+                        {isInsufficient ? '⚠️ ' : ''}{s.code} - {s.title} ({s.units}u) [Grade: {s.grade || 'N/A'}]{isInsufficient ? ` - [Insufficient: needs ${curUnits}u]` : ''}
+                      </option>
+                    );
+                  })}
+                </optgroup>
+              )}
+              {hasWork && (
+                <optgroup label="💼 Applicant Work Experience (Work Crediting)" style={{ color: '#7e22ce', fontWeight: 'bold' }}>
+                  {workExperiences.map((w) => (
+                    <option key={w.id} value={`work:${w.id}`} style={{ color: '#7e22ce', backgroundColor: '#f3e8ff', fontWeight: '600' }}>
+                      💼 [Work] {w.job_title} - {w.company_name} ({w.years} yrs)
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </div>
+
+          {/* Evaluator Remarks */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-gray-700">Remarks / Evaluator Note (Optional):</label>
+            <Textarea
+              placeholder="e.g. Manually aligned based on course syllabus equivalent..."
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              className="text-xs"
+              disabled={saving}
+            />
+          </div>
+        </div>
+
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button variant="outline" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSave}
+            className="bg-blue-600 hover:bg-blue-700 text-white"
+            disabled={saving || !selectedSource}
+          >
+            {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+            {saving ? 'Saving...' : 'Save Changes'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
 const UnmatchedCurriculumItem = ({ curriculum, torSubjects, workExperiences, applicationId, matches, onMatched, isFinalized }) => {
   const [selectedSource, setSelectedSource] = useState('');
   const [actioning, setActioning] = useState(false);
@@ -1256,11 +2158,21 @@ const UnmatchedCurriculumItem = ({ curriculum, torSubjects, workExperiences, app
       toast.info("Please select an applicant's subject or work experience first");
       return;
     }
+
+    const isWork = selectedSource.startsWith('work:');
+    const sourceId = selectedSource.replace(/^(tor|work):/, '');
+
+    // Enforce Rule 1: TOR subject units cannot be less than curriculum subject units
+    if (!isWork) {
+      const selectedSubj = (torSubjects || []).find(s => String(s.id) === String(sourceId));
+      if (selectedSubj && Number(selectedSubj.units || 0) < Number(curriculum?.units || 0)) {
+        toast.error(`Cannot match: Applicant subject "${selectedSubj.code}" has ${selectedSubj.units} unit(s), but ${curriculum.code} requires ${curriculum.units} unit(s).`);
+        return;
+      }
+    }
+
     setActioning(true);
     try {
-      const isWork = selectedSource.startsWith('work:');
-      const sourceId = selectedSource.replace(/^(tor|work):/, '');
-
       const existingMatch = (matches || []).find(m => 
         isWork ? m.work_experience?.id === sourceId : m.tor_subject?.id === sourceId
       );
@@ -1351,11 +2263,18 @@ const UnmatchedCurriculumItem = ({ curriculum, torSubjects, workExperiences, app
                 <option value="">Select scanned subject or work experience...</option>
                 {hasTor && (
                   <optgroup label="📜 Available TOR Subjects">
-                    {torSubjects.map(subject => (
-                      <option key={subject.id} value={`tor:${subject.id}`}>
-                        {subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]
-                      </option>
-                    ))}
+                    {torSubjects.map(subject => {
+                      const isInsufficient = Number(subject.units || 0) < Number(curriculum?.units || 0);
+                      return (
+                        <option 
+                          key={subject.id} 
+                          value={`tor:${subject.id}`}
+                          disabled={isInsufficient}
+                        >
+                          {isInsufficient ? '⚠️ ' : ''}{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]{isInsufficient ? ` - [Insufficient: needs ${curriculum.units}u]` : ''}
+                        </option>
+                      );
+                    })}
                   </optgroup>
                 )}
                 {hasWork && (
@@ -1598,30 +2517,42 @@ const MatchesList = ({ matches, onApprove, onReject, getConfidenceColor, disable
   );
 };
 
-const ReassignTorSubject = ({ match, torSubjects, workExperiences, onReassign }) => {
+const ReassignTorSubject = ({ match, torSubjects, workExperiences, onReassign, compact = false }) => {
   const [selected, setSelected] = useState('');
   const [busy, setBusy] = useState(false);
 
   const handleReassign = async () => {
     if (!selected) return;
+    const isWork = selected.startsWith('work:');
+    const sourceId = selected.replace(/^(tor|work):/, '');
+
+    // Enforce Rule 1: TOR subject units cannot be less than curriculum subject units
+    if (!isWork && match.curriculum_subject) {
+      const selectedSubj = (torSubjects || []).find(s => String(s.id) === String(sourceId));
+      if (selectedSubj && Number(selectedSubj.units || 0) < Number(match.curriculum_subject.units || 0)) {
+        toast.error(`Cannot match: Applicant subject "${selectedSubj.code}" has ${selectedSubj.units} unit(s), but ${match.curriculum_subject.code} requires ${match.curriculum_subject.units} unit(s).`);
+        return;
+      }
+    }
+
     setBusy(true);
     try {
-      if (selected.startsWith('work:')) {
-        const workExpId = selected.replace('work:', '');
+      if (isWork) {
         await subjectMatchApi.override(match.id, { 
-          work_experience_id: workExpId, 
+          work_experience_id: sourceId, 
           note: 'Reassigned to applicant work experience' 
         });
       } else {
-        const torSubjId = selected.replace('tor:', '');
         await subjectMatchApi.override(match.id, { 
-          tor_subject_id: torSubjId, 
+          tor_subject_id: sourceId, 
           note: 'Reassigned to correct TOR subject' 
         });
       }
       await subjectMatchApi.approve(match.id, 'Approved');
+      toast.success(`Match reassigned and approved.`);
       onReassign(match.id);
     } catch (e) {
+      toast.error('Failed to reassign: ' + (e.response?.data?.error || e.message));
       onReassign(match.id);
     }
     setBusy(false);
@@ -1632,21 +2563,25 @@ const ReassignTorSubject = ({ match, torSubjects, workExperiences, onReassign })
   const otherWorkExperiences = (workExperiences || []).filter(w => !match.work_experience || w.id !== match.work_experience.id);
 
   return (
-    <div className="flex items-center gap-2 flex-wrap">
+    <div className={compact ? 'flex items-center justify-center' : 'flex items-center gap-2 flex-wrap'}>
       <select 
-        className="border border-blue-200 px-2 py-1 text-xs min-w-[290px] bg-blue-50 rounded" 
+        className={compact ? 'border border-blue-200 px-1 py-1 text-[10px] w-28 bg-blue-50 rounded' : 'border border-blue-200 px-2 py-1 text-xs min-w-[290px] bg-blue-50 rounded'} 
         value={selected} 
         onChange={(e) => setSelected(e.target.value)}
+        title="Select a different applicant subject or work experience"
       >
-        <option value="">If AI matched wrong, choose correct TOR or Work...</option>
+        <option value="">Edit match...</option>
         
         {otherSubjects.length > 0 && (
           <optgroup label="📜 Applicant Scanned TOR Subjects">
-            {otherSubjects.map(subject => (
-              <option key={subject.id} value={`tor:${subject.id}`}>
-                {subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]
-              </option>
-            ))}
+            {otherSubjects.map(subject => {
+              const isInsufficient = match.curriculum_subject && Number(subject.units || 0) < Number(match.curriculum_subject.units || 0);
+              return (
+                <option key={subject.id} value={`tor:${subject.id}`} disabled={isInsufficient}>
+                  {isInsufficient ? '⚠️ ' : ''}{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]{isInsufficient ? ` - [Insufficient: needs ${match.curriculum_subject.units}u]` : ''}
+                </option>
+              );
+            })}
           </optgroup>
         )}
 
@@ -1665,7 +2600,7 @@ const ReassignTorSubject = ({ match, torSubjects, workExperiences, onReassign })
         )}
       </select>
       <Button size="sm" onClick={handleReassign} disabled={!selected || busy} className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-7">
-        {busy ? 'Reassigning...' : 'Reassign & Approve'}
+        {busy ? (compact ? '...' : 'Reassigning...') : (compact ? 'Edit' : 'Reassign & Approve')}
       </Button>
     </div>
   );
@@ -1676,6 +2611,15 @@ const ApproveWithTor = ({ match, torSubjects, workExperiences, onApprove }) => {
   const [busy, setBusy] = useState(false);
 
   const handleApprove = async () => {
+    if (selected && !selected.startsWith('work:') && match.curriculum_subject) {
+      const torId = selected.replace('tor:', '');
+      const selectedSubj = (torSubjects || []).find(s => String(s.id) === String(torId));
+      if (selectedSubj && Number(selectedSubj.units || 0) < Number(match.curriculum_subject.units || 0)) {
+        toast.error(`Cannot match: Applicant subject "${selectedSubj.code}" has ${selectedSubj.units} unit(s), but ${match.curriculum_subject.code} requires ${match.curriculum_subject.units} unit(s).`);
+        return;
+      }
+    }
+
     setBusy(true);
     try {
       if (selected) {
@@ -1702,9 +2646,14 @@ const ApproveWithTor = ({ match, torSubjects, workExperiences, onApprove }) => {
         <option value="">Select TOR subject or Work to approve...</option>
         {hasTor && (
           <optgroup label="📜 TOR Subjects">
-            {torSubjects.map(subject => (
-              <option key={subject.id} value={`tor:${subject.id}`}>{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]</option>
-            ))}
+            {torSubjects.map(subject => {
+              const isInsufficient = match.curriculum_subject && Number(subject.units || 0) < Number(match.curriculum_subject.units || 0);
+              return (
+                <option key={subject.id} value={`tor:${subject.id}`} disabled={isInsufficient}>
+                  {isInsufficient ? '⚠️ ' : ''}{subject.code} - {subject.title} ({subject.units}u) [{subject.grade}]{isInsufficient ? ` - [Insufficient: needs ${match.curriculum_subject.units}u]` : ''}
+                </option>
+              );
+            })}
           </optgroup>
         )}
         {hasWork && (
@@ -1764,12 +2713,23 @@ const AssignAndApprove = ({ match, passedSubjects, workExperiences, onApprove, l
 
   const handleAssign = async () => {
     if (!selected) return;
+    const isWork = selected.startsWith('work:');
+    const sourceId = selected.replace(/^(tor|work):/, '');
+
+    if (!isWork && match.curriculum_subject) {
+      const selectedSubj = (passedSubjects || []).find(s => String(s.id) === String(sourceId));
+      if (selectedSubj && Number(selectedSubj.units || 0) < Number(match.curriculum_subject.units || 0)) {
+        toast.error(`Cannot match: Applicant subject "${selectedSubj.code}" has ${selectedSubj.units} unit(s), but ${match.curriculum_subject.code} requires ${match.curriculum_subject.units} unit(s).`);
+        return;
+      }
+    }
+
     setBusy(true);
     try {
-      if (selected.startsWith('work:')) {
-        await subjectMatchApi.override(match.id, { work_experience_id: selected.replace('work:', ''), note: 'Selected from applicant work experience' });
+      if (isWork) {
+        await subjectMatchApi.override(match.id, { work_experience_id: sourceId, note: 'Selected from applicant work experience' });
       } else {
-        await subjectMatchApi.override(match.id, { tor_subject_id: selected.replace('tor:', ''), note: 'Selected from applicant TOR subject list' });
+        await subjectMatchApi.override(match.id, { tor_subject_id: sourceId, note: 'Selected from applicant TOR subject list' });
       }
       await subjectMatchApi.approve(match.id, 'Approved after manual selection');
       onApprove(match.id);
@@ -1788,9 +2748,14 @@ const AssignAndApprove = ({ match, passedSubjects, workExperiences, onApprove, l
         <option value="">{label}</option>
         {hasTor && (
           <optgroup label="📜 TOR Subjects">
-            {passedSubjects.map(subject => (
-              <option key={subject.id} value={`tor:${subject.id}`}>{subject.code} - {subject.title} ({subject.units}u) {subject.grade ? `[${subject.grade}]` : ''}</option>
-            ))}
+            {passedSubjects.map(subject => {
+              const isInsufficient = match.curriculum_subject && Number(subject.units || 0) < Number(match.curriculum_subject.units || 0);
+              return (
+                <option key={subject.id} value={`tor:${subject.id}`} disabled={isInsufficient}>
+                  {isInsufficient ? '⚠️ ' : ''}{subject.code} - {subject.title} ({subject.units}u) {subject.grade ? `[${subject.grade}]` : ''}{isInsufficient ? ` - [Insufficient: needs ${match.curriculum_subject.units}u]` : ''}
+                </option>
+              );
+            })}
           </optgroup>
         )}
         {hasWork && (

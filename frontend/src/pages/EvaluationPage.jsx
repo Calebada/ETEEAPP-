@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
-import { ChatbotWidget } from '../components/ChatbotWidget';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -51,50 +50,267 @@ export const EvaluationPage = () => {
   };
 
   const downloadReport = () => {
-    const pdf = new jsPDF();
-    
-    pdf.setFontSize(20);
-    pdf.setTextColor(122, 30, 43);
-    pdf.text('ACCREDIA Evaluation Report', 20, 20);
-    
-    pdf.setFontSize(10);
-    pdf.setTextColor(100);
-    pdf.text(`Applicant: ${application.applicant.full_name}`, 20, 35);
-    pdf.text(`Email: ${application.applicant.email}`, 20, 42);
-    pdf.text(`Application ID: ${application.id}`, 20, 49);
-    pdf.text(`Date: ${new Date().toLocaleDateString()}`, 20, 56);
-    
-    pdf.setFontSize(14);
-    pdf.setTextColor(122, 30, 43);
-    pdf.text('Credited Subjects', 20, 75);
-    
-    let y = 85;
-    pdf.setFontSize(9);
-    pdf.setTextColor(0);
-    
-    const credited = matches.filter(m => m.confidence >= 60);
-    credited.forEach((m) => {
-      if (y > 270) { pdf.addPage(); y = 20; }
-      const subj = m.curriculum_subject;
-      const source = m.source === 'tor' ? 'TOR' : 'Work Exp';
-      if (subj) {
-        pdf.text(`${subj.code} - ${subj.title} (${subj.units} units)`, 25, y);
-        pdf.text(`${m.confidence.toFixed(0)}% [${source}]`, 160, y);
-        y += 7;
-      }
-    });
-    
-    if (prediction) {
-      y += 10;
-      if (y > 250) { pdf.addPage(); y = 20; }
-      pdf.setFontSize(14);
-      pdf.setTextColor(122, 30, 43);
-      pdf.text('Completion Forecast', 20, y);
+    try {
+      const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+      const pageWidth = doc.internal.pageSize.getWidth(); // 210mm
+      const pageHeight = doc.internal.pageSize.getHeight(); // 297mm
+      const margin = 14;
+      const contentWidth = pageWidth - (margin * 2); // 182mm
 
+      let yPos = margin;
+
+      const applicantName = application?.applicant?.full_name || 
+        `${application?.applicant?.first_name || ''} ${application?.applicant?.last_name || ''}`.trim() || 'Applicant';
+      const programName = application?.program?.name || 'Bachelor of Science in Information Technology';
+      const programCode = application?.program?.code || 'BSIT';
+
+      const approved = matches.filter(m => m.status === 'approved' || (m.status !== 'rejected' && m.confidence >= 75));
+      const rejected = matches.filter(m => m.status === 'rejected');
+      const totalApprovedUnits = approved.reduce((sum, m) => sum + Number(m.curriculum_subject?.units || 0), 0);
+      const torCount = approved.filter(m => m.source === 'tor').length;
+      const workCount = approved.filter(m => m.source === 'work_experience').length;
+
+      const renderHeader = (isFirstPage = true) => {
+        doc.setFillColor(122, 30, 43); // Maroon
+        doc.rect(0, 0, pageWidth, 6, 'F');
+        doc.setFillColor(212, 175, 55); // Gold
+        doc.rect(0, 6, pageWidth, 1.5, 'F');
+
+        if (isFirstPage) {
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(13);
+          doc.setTextColor(122, 30, 43);
+          doc.text('CEBU INSTITUTE OF TECHNOLOGY - UNIVERSITY', margin, 16);
+
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(8.5);
+          doc.setTextColor(100, 116, 139);
+          doc.text('Expanded Tertiary Education Equivalency and Accreditation Program (ETEEAP)', margin, 21);
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(15);
+          doc.setTextColor(15, 23, 42);
+          doc.text('ETEEAP Evaluation & Subject Equivalency Report', margin, 29);
+
+          doc.setDrawColor(226, 232, 240);
+          doc.setLineWidth(0.5);
+          doc.line(margin, 32, pageWidth - margin, 32);
+        }
+      };
+
+      renderHeader(true);
+      yPos = 36;
+
+      // Metadata Info Box
+      doc.setFillColor(248, 250, 252);
+      doc.roundedRect(margin, yPos, contentWidth, 23, 2, 2, 'F');
+      doc.setDrawColor(203, 213, 225);
+      doc.roundedRect(margin, yPos, contentWidth, 23, 2, 2, 'S');
+      doc.setFillColor(122, 30, 43);
+      doc.rect(margin, yPos, 2.5, 23, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(71, 85, 105);
+      doc.text('APPLICANT NAME:', margin + 6, yPos + 5.5);
+      doc.text('DEGREE PROGRAM:', margin + 6, yPos + 12);
+      doc.text('APPLICATION ID:', margin + 6, yPos + 18.5);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(15, 23, 42);
+      doc.text(applicantName, margin + 38, yPos + 5.5);
+      doc.text(`${programName} (${programCode})`, margin + 38, yPos + 12);
+      doc.text(`#${application?.id || 'N/A'}`, margin + 38, yPos + 18.5);
+
+      const col2X = margin + 105;
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(71, 85, 105);
+      doc.text('DATE GENERATED:', col2X, yPos + 5.5);
+      doc.text('TOTAL CREDITS:', col2X, yPos + 12);
+      doc.text('STATUS:', col2X, yPos + 18.5);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(15, 23, 42);
+      doc.text(new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }), col2X + 30, yPos + 5.5);
+      
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(122, 30, 43);
+      doc.text(`${totalApprovedUnits} Units (${approved.length} Subjects)`, col2X + 30, yPos + 12);
+
+      doc.setTextColor(22, 101, 52);
+      doc.text(application?.status?.toUpperCase() || 'EVALUATED', col2X + 30, yPos + 18.5);
+
+      yPos += 28;
+
+      // Table Section
+      const drawTableSection = (title, items, isApprovedTable = true) => {
+        if (items.length === 0) return;
+
+        if (yPos > pageHeight - 35) {
+          doc.addPage();
+          renderHeader(false);
+          yPos = 16;
+        }
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10.5);
+        doc.setTextColor(isApprovedTable ? 30 : 153, isApprovedTable ? 64 : 27, isApprovedTable ? 175 : 27);
+        doc.text(`${title} (${items.length})`, margin, yPos);
+        yPos += 4;
+
+        const colW = [50, 76, 14, 22, 20];
+        const headers = isApprovedTable 
+          ? ['BSIT Curriculum Subject', 'Matched Applicant Subject / Evidence', 'Units', 'Source', 'Confidence']
+          : ['BSIT Curriculum Subject', 'Attempted Applicant Subject', 'Units', 'Source', 'Rejection Note'];
+
+        doc.setFillColor(isApprovedTable ? 37 : 185, isApprovedTable ? 99 : 28, isApprovedTable ? 235 : 28);
+        doc.rect(margin, yPos, contentWidth, 7, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(255, 255, 255);
+
+        let currX = margin;
+        headers.forEach((h, idx) => {
+          const align = (idx === 2 || idx === 3 || (isApprovedTable && idx === 4)) ? 'center' : 'left';
+          const textX = align === 'center' ? currX + (colW[idx] / 2) : currX + 2;
+          doc.text(h, textX, yPos + 4.8, { align });
+          currX += colW[idx];
+        });
+
+        yPos += 7;
+
+        items.forEach((match, rowIdx) => {
+          const curCode = match.curriculum_subject?.code || 'N/A';
+          const curTitle = match.curriculum_subject?.title || 'N/A';
+          const curUnits = String(match.curriculum_subject?.units || 0);
+          
+          let evidenceText = '';
+          if (match.tor_subject) {
+            evidenceText = `${match.tor_subject.code} - ${match.tor_subject.title} (${match.tor_subject.units || 0}u, Grd: ${match.tor_subject.grade || 'N/A'})`;
+          } else if (match.work_experience) {
+            evidenceText = `[Work] ${match.work_experience.job_title} at ${match.work_experience.company_name} (${match.work_experience.years || 0}y)`;
+          } else {
+            evidenceText = 'None recorded';
+          }
+
+          const sourceText = match.source === 'tor' ? 'TOR' : 'Work Exp';
+          const lastColText = isApprovedTable 
+            ? `${match.confidence.toFixed(0)}%` 
+            : (match.evaluator_note || 'Rejected');
+
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(7.5);
+          const curLines = doc.splitTextToSize(`${curCode}\n${curTitle}`, colW[0] - 4);
+          const evLines = doc.splitTextToSize(evidenceText, colW[1] - 4);
+          const lastLines = doc.splitTextToSize(lastColText, colW[4] - 4);
+          const maxLines = Math.max(curLines.length, evLines.length, lastLines.length, 1);
+          const rowHeight = Math.max(maxLines * 4 + 3, 7.5);
+
+          if (yPos + rowHeight > pageHeight - 25) {
+            doc.addPage();
+            renderHeader(false);
+            yPos = 16;
+
+            doc.setFillColor(isApprovedTable ? 37 : 185, isApprovedTable ? 99 : 28, isApprovedTable ? 235 : 28);
+            doc.rect(margin, yPos, contentWidth, 7, 'F');
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(7.5);
+            doc.setTextColor(255, 255, 255);
+            let reX = margin;
+            headers.forEach((h, idx) => {
+              const align = (idx === 2 || idx === 3 || (isApprovedTable && idx === 4)) ? 'center' : 'left';
+              const textX = align === 'center' ? reX + (colW[idx] / 2) : reX + 2;
+              doc.text(h, textX, yPos + 4.8, { align });
+              reX += colW[idx];
+            });
+            yPos += 7;
+          }
+
+          if (rowIdx % 2 === 0) {
+            doc.setFillColor(248, 250, 252);
+            doc.rect(margin, yPos, contentWidth, rowHeight, 'F');
+          }
+
+          doc.setDrawColor(226, 232, 240);
+          doc.rect(margin, yPos, contentWidth, rowHeight, 'S');
+
+          let colX = margin;
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(7.5);
+          doc.setTextColor(isApprovedTable ? 29 : 153, isApprovedTable ? 78 : 27, isApprovedTable ? 216 : 27);
+          doc.text(curCode, colX + 2, yPos + 3.8);
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(51, 65, 85);
+          const remainingCurLines = doc.splitTextToSize(curTitle, colW[0] - 4);
+          remainingCurLines.forEach((line, li) => {
+            doc.text(line, colX + 2, yPos + 7.5 + (li * 3.5));
+          });
+          colX += colW[0];
+
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(15, 23, 42);
+          evLines.forEach((line, li) => {
+            doc.text(line, colX + 2, yPos + 4 + (li * 3.5));
+          });
+          colX += colW[1];
+
+          doc.setFont('helvetica', 'bold');
+          doc.setTextColor(15, 23, 42);
+          doc.text(curUnits, colX + (colW[2] / 2), yPos + (rowHeight / 2) + 1.2, { align: 'center' });
+          colX += colW[2];
+
+          doc.setFont('helvetica', 'normal');
+          doc.setTextColor(match.source === 'tor' ? 146 : 107, match.source === 'tor' ? 64 : 33, match.source === 'tor' ? 14 : 168);
+          doc.text(sourceText, colX + (colW[3] / 2), yPos + (rowHeight / 2) + 1.2, { align: 'center' });
+          colX += colW[3];
+
+          if (isApprovedTable) {
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(22, 101, 52);
+            doc.text(`${match.confidence.toFixed(0)}%`, colX + (colW[4] / 2), yPos + (rowHeight / 2) + 1.2, { align: 'center' });
+          } else {
+            doc.setFont('helvetica', 'italic');
+            doc.setTextColor(153, 27, 27);
+            lastLines.forEach((line, li) => {
+              doc.text(line, colX + 2, yPos + 4 + (li * 3.5));
+            });
+          }
+
+          yPos += rowHeight;
+        });
+
+        yPos += 8;
+      };
+
+      drawTableSection('Credited Curriculum Subjects', approved, true);
+      drawTableSection('Unaccredited / Rejected Subjects', rejected, false);
+
+      const totalPages = doc.internal.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(148, 163, 184);
+        doc.text(
+          `Cebu Institute of Technology - University · ETEEAP ACCREDIA System · Page ${i} of ${totalPages}`,
+          pageWidth / 2,
+          pageHeight - 6,
+          { align: 'center' }
+        );
+      }
+
+      const safeName = (applicantName || 'applicant')
+        .replace(/[^a-zA-Z0-9-_ ]/g, '')
+        .replace(/\s+/g, '-')
+        .toLowerCase();
+      doc.save(`eteeap-evaluation-report-${safeName}-${application?.id?.slice(0, 8) || 'report'}.pdf`);
+      toast.success('Evaluation Report PDF downloaded');
+    } catch (error) {
+      console.error('Error downloading PDF:', error);
+      toast.error('Failed to generate PDF: ' + error.message);
     }
-    
-    pdf.save(`ACCREDIA_Report_${application.id.slice(0, 8)}.pdf`);
-    toast.success('Report downloaded');
   };
 
   if (loading) {
@@ -221,8 +437,6 @@ export const EvaluationPage = () => {
           </Tabs>
         ) : null}
       </div>
-
-      <ChatbotWidget />
     </div>
   );
 };
@@ -293,17 +507,23 @@ const SubjectMatchTable = ({ matches, getConfidenceColor }) => {
                     {match.curriculum_subject.units} units · Year {match.curriculum_subject.year}, Sem {match.curriculum_subject.semester}
                   </div>
                   {match.tor_subject && (
-                    <div className="text-xs text-gray-500 italic mt-1">
-                      Mapped from TOR: {match.tor_subject.code} - {match.tor_subject.title}
+                    <div className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded p-2 mt-1.5">
+                      <span className="font-semibold">Attempted TOR Subject:</span> {match.tor_subject.code} - {match.tor_subject.title} ({match.tor_subject.units || 0}u, Grade: {match.tor_subject.grade || 'N/A'})
                     </div>
                   )}
                   {match.work_experience && (
-                    <div className="text-xs text-gray-500 italic mt-1">
-                      Based on: {match.work_experience.job_title} at {match.work_experience.company_name}
+                    <div className="text-xs text-purple-900 bg-purple-50 border border-purple-200 rounded p-2 mt-1.5">
+                      <span className="font-semibold">Attempted Work Experience:</span> {match.work_experience.job_title} at {match.work_experience.company_name} ({match.work_experience.years || 0}y)
+                    </div>
+                  )}
+                  {match.tor_subject && match.curriculum_subject && Number(match.tor_subject.units || 0) < Number(match.curriculum_subject.units || 0) && (
+                    <div className="text-xs text-red-800 bg-red-100/80 border border-red-200 rounded p-2 mt-1.5 flex items-center gap-1.5 font-medium">
+                      <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 text-red-600" />
+                      <span>Insufficient units: Applicant subject has {match.tor_subject.units} unit(s), but BSIT curriculum requires {match.curriculum_subject.units} unit(s).</span>
                     </div>
                   )}
                   {match.matching_reason && (
-                    <div className="text-xs text-gray-600 mt-2 bg-gray-50 p-2 rounded">
+                    <div className="text-xs text-gray-600 mt-2 bg-gray-50 p-2 rounded border border-gray-100">
                       <strong>AI Reasoning:</strong> {match.matching_reason}
                     </div>
                   )}

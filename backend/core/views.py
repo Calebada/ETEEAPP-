@@ -559,9 +559,37 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
         
         match = self.get_object()
+
+        # Enforce Rule 1: TOR subject units cannot be less than curriculum subject units
+        if match.source == 'tor' and match.tor_subject and match.curriculum_subject:
+            tor_units = float(match.tor_subject.units or 0)
+            cur_units = float(match.curriculum_subject.units or 0)
+            if tor_units < cur_units:
+                return Response(
+                    {'error': f'Cannot approve: Insufficient units (TOR subject "{match.tor_subject.code}" has {tor_units:g} unit(s), but curriculum requires {cur_units:g} unit(s)).'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         match.status = 'approved'
-        match.evaluator_note = request.data.get('note', '')
+        if request.data.get('note'):
+            match.evaluator_note = request.data.get('note')
         match.save()
+
+        # Enforce 1-to-1 matching: remove other pending matches for the same TOR subject or Curriculum subject
+        if match.tor_subject_id:
+            SubjectMatch.objects.filter(
+                application=match.application,
+                tor_subject_id=match.tor_subject_id,
+                status='pending'
+            ).exclude(id=match.id).delete()
+
+        if match.curriculum_subject_id:
+            SubjectMatch.objects.filter(
+                application=match.application,
+                curriculum_subject_id=match.curriculum_subject_id,
+                status='pending'
+            ).exclude(id=match.id).delete()
+
         return Response(SubjectMatchSerializer(match).data)
     
     @action(detail=True, methods=['post'])
@@ -589,6 +617,20 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
             return Response({'error': 'application_id and curriculum_subject_id are required'}, status=status.HTTP_400_BAD_REQUEST)
         
         source = 'work_experience' if work_experience_id else 'tor'
+
+        # Enforce Rule 1: Unit sufficiency for TOR subjects
+        if source == 'tor' and tor_subject_id and curriculum_subject_id:
+            tor_subj = TORSubject.objects.filter(id=tor_subject_id).first()
+            cur_subj = CurriculumSubject.objects.filter(id=curriculum_subject_id).first()
+            if tor_subj and cur_subj:
+                tor_units = float(tor_subj.units or 0)
+                cur_units = float(cur_subj.units or 0)
+                if tor_units < cur_units:
+                    return Response(
+                        {'error': f'Cannot match: Applicant subject "{tor_subj.code}" has {tor_units:g} unit(s), but BSIT curriculum requires {cur_units:g} unit(s).'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
         match, created = SubjectMatch.objects.update_or_create(
             application_id=application_id,
             curriculum_subject_id=curriculum_subject_id,
@@ -601,6 +643,21 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
                 'evaluator_note': note or 'Manually matched and approved by evaluator'
             }
         )
+
+        # Enforce 1-to-1 matching: remove any other pending matches
+        if tor_subject_id:
+            SubjectMatch.objects.filter(
+                application_id=application_id,
+                tor_subject_id=tor_subject_id,
+                status='pending'
+            ).exclude(id=match.id).delete()
+        if curriculum_subject_id:
+            SubjectMatch.objects.filter(
+                application_id=application_id,
+                curriculum_subject_id=curriculum_subject_id,
+                status='pending'
+            ).exclude(id=match.id).delete()
+
         return Response(SubjectMatchSerializer(match).data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
@@ -613,6 +670,20 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
         new_tor_subject_id = request.data.get('tor_subject_id')
         new_work_experience_id = request.data.get('work_experience_id')
 
+        # Enforce Rule 1: Unit sufficiency
+        target_cur_id = new_curriculum_id or match.curriculum_subject_id
+        if new_tor_subject_id and target_cur_id:
+            tor_subj = TORSubject.objects.filter(id=new_tor_subject_id).first()
+            cur_subj = CurriculumSubject.objects.filter(id=target_cur_id).first()
+            if tor_subj and cur_subj:
+                tor_units = float(tor_subj.units or 0)
+                cur_units = float(cur_subj.units or 0)
+                if tor_units < cur_units:
+                    return Response(
+                        {'error': f'Cannot match: Applicant subject "{tor_subj.code}" has {tor_units:g} unit(s), but BSIT curriculum requires {cur_units:g} unit(s).'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
         if new_curriculum_id:
             match.curriculum_subject_id = new_curriculum_id
         if new_work_experience_id:
@@ -624,9 +695,25 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
             match.work_experience = None
             match.source = 'tor'
 
-        match.status = 'overridden'
-        match.evaluator_note = request.data.get('note', '')
+        match.status = request.data.get('status', 'approved')
+        if 'note' in request.data:
+            match.evaluator_note = request.data.get('note', '')
         match.save()
+
+        # Enforce 1-to-1 matching: remove other pending matches
+        if match.tor_subject_id:
+            SubjectMatch.objects.filter(
+                application=match.application,
+                tor_subject_id=match.tor_subject_id,
+                status='pending'
+            ).exclude(id=match.id).delete()
+        if match.curriculum_subject_id:
+            SubjectMatch.objects.filter(
+                application=match.application,
+                curriculum_subject_id=match.curriculum_subject_id,
+                status='pending'
+            ).exclude(id=match.id).delete()
+
         return Response(SubjectMatchSerializer(match).data)
 
 class ChatConversationViewSet(viewsets.ModelViewSet):

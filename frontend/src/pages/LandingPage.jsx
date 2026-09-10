@@ -2,7 +2,6 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Navbar } from '../components/Navbar';
-import { ChatbotWidget } from '../components/ChatbotWidget';
 import { GraduationCap, FileSearch, Sparkles, Award, ArrowRight, CheckCircle2, Brain, FileText, Clock, Users } from 'lucide-react';
 
 export const LandingPage = () => {
@@ -245,8 +244,6 @@ export const LandingPage = () => {
           </div>
         </div>
       </footer>
-
-      <ChatbotWidget />
     </div>
   );
 };

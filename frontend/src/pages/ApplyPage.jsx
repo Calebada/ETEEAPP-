@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
-import { ChatbotWidget } from '../components/ChatbotWidget';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -999,8 +998,6 @@ export const ApplyPage = () => {
           </Card>
         )}
       </div>
-
-      <ChatbotWidget />
     </div>
   );
 };

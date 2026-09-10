@@ -408,8 +408,17 @@ def run_full_evaluation_sync(application_id):
             print(f"Recommendation error: {e}")
     
     # Step 2: Match TOR subjects to curriculum (PARALLEL PROCESSING)
+    # Exclude curriculum subjects that have already been reviewed/approved for this application
+    approved_curriculum_ids = set(
+        SubjectMatch.objects.filter(
+            application=application,
+            status__in=reviewed_statuses,
+            curriculum_subject__isnull=False
+        ).values_list('curriculum_subject_id', flat=True)
+    )
+    
     tor_subjects = list(TORSubject.objects.filter(application=application))
-    curriculum_qs = CurriculumSubject.objects.filter(program=application.program)
+    curriculum_qs = CurriculumSubject.objects.filter(program=application.program).exclude(id__in=approved_curriculum_ids)
     curriculum_list = list(curriculum_qs.values('id', 'code', 'title', 'description', 'units'))
     
     # Convert UUIDs to strings for JSON serialization
@@ -455,15 +464,27 @@ def run_full_evaluation_sync(application_id):
                         program=application.program
                     ).first()
                     
-                    SubjectMatch.objects.create(
-                        application=application,
-                        tor_subject=tor_subject,
-                        curriculum_subject=curriculum_subj,
-                        source='tor',
-                        confidence=float(best_match.get('confidence', 0)),
-                        matching_reason=best_match.get('reasoning', ''),
-                        status='pending'
-                    )
+                    # Enforce Unit Sufficiency Rule: Applicant units must be >= curriculum units
+                    if tor_subject.units and curriculum_subj and curriculum_subj.units and tor_subject.units < curriculum_subj.units:
+                        SubjectMatch.objects.create(
+                            application=application,
+                            tor_subject=tor_subject,
+                            curriculum_subject=None,
+                            source='tor',
+                            confidence=0,
+                            status='pending',
+                            matching_reason=f'Insufficient units: TOR subject has {tor_subject.units} unit(s), but {curriculum_subj.code} requires {curriculum_subj.units} unit(s).'
+                        )
+                    else:
+                        SubjectMatch.objects.create(
+                            application=application,
+                            tor_subject=tor_subject,
+                            curriculum_subject=curriculum_subj,
+                            source='tor',
+                            confidence=float(best_match.get('confidence', 0)),
+                            matching_reason=best_match.get('reasoning', ''),
+                            status='pending'
+                        )
                 else:
                     SubjectMatch.objects.create(
                         application=application,

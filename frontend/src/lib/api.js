@@ -75,6 +75,7 @@ export const workExperienceApi = {
 export const subjectMatchApi = {
   list: (applicationId) => apiClient.get(`/subject-matches/?application_id=${applicationId}`),
   create: (data) => apiClient.post('/subject-matches/', data),
+  delete: (id) => apiClient.delete(`/subject-matches/${id}/`),
   flag: (id, note) => apiClient.post(`/subject-matches/${id}/flag/`, { note }),
   approve: (id, note) => apiClient.post(`/subject-matches/${id}/approve/`, { note }),
   reject: (id, note) => apiClient.post(`/subject-matches/${id}/reject/`, { note }),

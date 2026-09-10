@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { Navbar } from '../components/Navbar';
-import { ChatbotWidget } from '../components/ChatbotWidget';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
@@ -163,8 +162,6 @@ export const AdminDashboard = () => {
           </TabsContent>
         </Tabs>
       </div>
-
-      <ChatbotWidget />
     </div>
   );
 };
