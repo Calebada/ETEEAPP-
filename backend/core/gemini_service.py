@@ -795,176 +795,221 @@ Rules:
                         'c programming 1', 'computer fundamentals and programming', 'computer concepts and programming',
                         'programming 1 (c/c++)', 'fundamentals of computer programming'
                     ]),
-                    # 2. Intermediate / Object-Oriented Programming (CSIT201, CSIT221)
-                    (['CSIT201', 'CSIT221'], [
-                        'computer programming 2', 'intermediate programming', 'object-oriented programming', 'object oriented programming',
-                        'programming 2', 'oop', 'java programming', 'c++ programming', 'computer programming ii',
-                        'object-oriented analysis and design', 'advanced programming', 'java 1', 'java 2', 'c# programming',
-                        'event-driven programming', 'visual programming', 'visual basic', 'vb.net', 'java programming 1',
-                        'object oriented programming in java', 'object oriented programming in c++'
-                    ]),
-                    # 3. Discrete Structures 1 (CSIT122)
+                    # 2. Intermediate Programming (CSIT122)
                     (['CSIT122'], [
+                        'computer programming 2', 'intermediate programming', 'programming 2', 'computer programming ii',
+                        'advanced programming', 'c++ programming 2', 'intermediate computer programming', 'programming logic 2'
+                    ]),
+                    # 3. Object-Oriented Programming 1 & 2 (CSIT227, CSIT228)
+                    (['CSIT227'], [
+                        'object-oriented programming', 'object oriented programming', 'oop', 'java programming',
+                        'c++ programming', 'object-oriented programming 1', 'object oriented programming 1', 'java 1',
+                        'c# programming', 'object-oriented analysis and design', 'visual programming', 'visual basic',
+                        'vb.net', 'java programming 1', 'object oriented programming in java', 'object oriented programming in c++'
+                    ]),
+                    (['CSIT228'], [
+                        'object-oriented programming 2', 'object oriented programming 2', 'advanced object-oriented programming',
+                        'advanced oop', 'java 2', 'java programming 2', 'advanced java', 'advanced c#'
+                    ]),
+                    # 4. Discrete Structures 1 (CSIT112)
+                    (['CSIT112'], [
                         'discrete structures', 'discrete mathematics', 'discrete structures 1', 'discrete math',
                         'discrete structures i', 'combinatorics', 'graph theory', 'discrete structures and graph theory',
                         'discrete mathematics with graph theory', 'mathematics for computer science'
                     ]),
-                    # 4. Introduction to Computing (CSIT111)
+                    # 5. Introduction to Computing (CSIT111)
                     (['CSIT111'], [
                         'introduction to computing', 'intro to computing', 'computer fundamentals', 'introduction to computer studies',
                         'intro to computer science', 'it fundamentals', 'intro to it', 'introduction to it', 'pc operations',
                         'computer literacy', 'living in the it era', 'information technology concepts', 'computing fundamentals',
                         'computer concepts and applications', 'information technology fundamentals'
                     ]),
-                    # 5. Introduction to Computer Systems / Hardware (CSIT112)
-                    (['CSIT112'], [
+                    # 6. Introduction to Computer Systems (CS132)
+                    (['CS132'], [
                         'introduction to computer systems', 'pc hardware', 'hardware and troubleshooting', 'computer systems',
                         'computer architecture', 'computer hardware', 'pc hardware and troubleshooting', 'computer hardware and servicing',
                         'computer system servicing', 'hardware servicing', 'digital electronics', 'electronics (lab)', 'electronics (lec)',
                         'electronics lab', 'electronics lec', 'electronics', 'microprocessor systems', 'computer assembly and maintenance',
                         'css nc ii', 'computer technician course', 'computer assembly, maintenance and troubleshooting'
                     ]),
-                    # 6. Database Systems / Information Management 1 (CSIT226)
+                    # 7. Database Systems / Information Management 1 (CSIT226)
                     (['CSIT226'], [
                         'database management systems', 'database management', 'database systems', 'fundamentals of database',
                         'information management 1', 'information management', 'dbms', 'intro to database', 'relational database',
                         'database concepts', 'sql fundamentals', 'data management', 'relational database management systems',
                         'sql server', 'mysql database', 'oracle database 1', 'ms access and sql', 'database design and management'
                     ]),
-                    # 7. Advanced Database / Information Management 2 (CSIT327)
+                    # 8. Advanced Database / Information Management 2 (CSIT327)
                     (['CSIT327'], [
                         'advanced database', 'information management 2', 'advanced dbms', 'database administration',
                         'data warehousing', 'nosql databases', 'big data', 'oracle database 2', 'data warehousing and mining',
                         'database administration and security'
                     ]),
-                    # 8. Data Structures and Algorithms (CSIT227)
-                    (['CSIT227'], [
+                    # 9. Data Structures and Algorithms (CSIT221)
+                    (['CSIT221'], [
                         'data structures and algorithms', 'data structures', 'algorithms and data structures',
                         'data structures and algorithm analysis', 'data structure and algorithms', 'design and analysis of algorithms',
                         'algorithms and complexity', 'advanced data structures'
                     ]),
-                    # 9. Web Development / Platform-based Development 2 (CSIT238)
-                    (['CSIT238'], [
+                    # 10. Web Development / Platform-based Development 2 (CSIT201)
+                    (['CSIT201'], [
                         'web development', 'web systems and technologies', 'web design', 'web development fundamentals',
                         'advanced web design', 'internet programming', 'web programming', 'web technologies', 'web applications',
                         'web development 1', 'web development 2', 'platform-based development 2 (web)', 'basic internet',
                         'internet concepts', 'web page design', 'html and css', 'client-side web development', 'server-side web development',
                         'php and mysql', 'full-stack web development', 'e-commerce technology', 'web development technologies'
                     ]),
-                    # 10. Multimedia Systems / Platform-based Development 1 (CSIT213)
-                    (['CSIT213'], [
+                    # 11. Multimedia Systems / Platform-based Development 1 (CSIT104)
+                    (['CSIT104'], [
                         'platform-based development 1 (multimedia)', 'multimedia systems', 'multimedia technologies', 'digital media',
                         'computer graphics', 'multimedia and animation', 'multimedia arts', 'audio video production', '2d animation',
                         '3d animation', 'desktop publishing', 'interactive media', 'digital graphics and animation'
                     ]),
-                    # 11. Human Computer Interaction (CSIT284)
-                    (['CSIT284'], [
+                    # 12. Social Issues and Professional Practice (CSIT213)
+                    (['CSIT213'], [
+                        'social issues and professional practice', 'social issues in computing', 'professional ethics in it',
+                        'it ethics', 'social and professional issues', 'computer ethics', 'it laws and ethics', 'legal issues in computing'
+                    ]),
+                    # 13. Human Computer Interaction (CSIT238)
+                    (['CSIT238'], [
                         'human computer interaction', 'human-computer interaction', 'hci', 'ui/ux design', 'user interface design',
                         'user experience design', 'ui design', 'ux design', 'interaction design', 'usability engineering',
                         'user interface and user experience design', 'human computer interface'
                     ]),
-                    # 12. Networking 1 (IT227)
+                    # 14. Mobile Development / Platform-based Development 3 (CSIT284)
+                    (['CSIT284'], [
+                        'platform-based development 3 (mobile)', 'platform-based development 3', 'mobile programming',
+                        'mobile application development', 'mobile development', 'android programming', 'ios programming',
+                        'mobile app development', 'cross-platform mobile development'
+                    ]),
+                    # 15. Networking 1 (IT227)
                     (['IT227'], [
                         'networking 1', 'networking fundamentals', 'computer networks', 'data communications and networking',
                         'network fundamentals', 'cisco 1', 'ccna 1', 'intro to networking', 'networking i', 'data communications',
                         'telecommunications', 'lan fundamentals', 'computer networking and data communication'
                     ]),
-                    # 13. Networking 2 (IT228)
+                    # 16. Networking 2 (IT228)
                     (['IT228'], [
                         'networking 2', 'routing and switching', 'advanced networking', 'cisco 2', 'ccna 2', 'networking ii',
                         'network administration', 'wan technologies', 'cisco 3', 'cisco 4', 'scaling networks', 'advanced computer networks'
                     ]),
-                    # 14. Information Assurance and Security 1 (IT332)
-                    (['IT332'], [
+                    # 17. Information Assurance and Security 1 & 2 (CSIT385, IT386)
+                    (['CSIT385'], [
                         'information assurance and security 1', 'information security', 'cybersecurity', 'information assurance',
                         'principles of information security', 'fundamentals of cybersecurity', 'infosec', 'network security',
                         'general and industrial safety 1', 'industrial safety', 'it safety and security', 'information security fundamentals',
                         'computer security', 'security principles'
                     ]),
-                    # 15. Systems Integration and Architecture 1 (IT344)
-                    (['IT344'], [
+                    (['IT386'], [
+                        'information assurance and security 2', 'information assurance 2', 'network security 2',
+                        'advanced security', 'security audit', 'cybersecurity 2', 'incident response'
+                    ]),
+                    # 18. Systems Integration and Architecture 1 (IT342)
+                    (['IT342'], [
                         'systems integration and architecture 1', 'systems analysis and design', 'system analysis and design',
                         'enterprise architecture', 'systems integration', 'software design', 'sad', 'system analysis and software engineering',
                         'software architecture'
                     ]),
-                    # 16. Systems Administration and Maintenance (IT346)
-                    (['IT346'], [
+                    # 19. Systems Administration and Maintenance (IT344)
+                    (['IT344'], [
                         'systems administration and maintenance', 'system administration', 'server administration',
                         'network and systems administration', 'linux administration', 'windows server', 'server maintenance',
                         'systems and network administration'
                     ]),
-                    # 17. Applications Development and Emerging Technologies (CSIT321, CSITELEC1)
+                    # 20. Applications Development and Emerging Technologies (CSIT321, CSITELEC1)
                     (['CSIT321', 'CSITELEC1'], [
-                        'applications development and emerging technologies', 'mobile application development', 'mobile development',
-                        'android development', 'ios development', 'mobile programming', 'app development', 'cross-platform mobile development',
-                        'mobile apps development', 'emerging technologies in it', 'emerging trends in computing'
+                        'applications development and emerging technologies', 'emerging technologies in it', 'emerging trends in computing',
+                        'advanced application development', 'software engineering 2'
                     ]),
-                    # 18. Project Management for IT (IT365)
-                    (['IT365'], [
+                    # 21. Project Management for IT (IT317)
+                    (['IT317'], [
                         'project management for it', 'it project management', 'software engineering', 'software engineering 1',
                         'software project management', 'it quality assurance', 'it project management and quality assurance'
                     ]),
-                    # 19. Capstone and Research 1 & 2 (IT342, IT411)
-                    (['IT342'], [
+                    # 22. Data Analytics 1 (IT365)
+                    (['IT365'], [
+                        'data analytics', 'data analytics 1', 'data analysis', 'business analytics', 'data science fundamentals', 'data mining'
+                    ]),
+                    # 23. Technopreneurship (ES038)
+                    (['ES038'], [
+                        'technopreneurship', 'entrepreneurship', 'techno entrepreneurship', 'business planning', 'principles of management'
+                    ]),
+                    # 24. Quantitative Methods (CSIT212)
+                    (['CSIT212'], [
+                        'quantitative methods', 'statistics', 'probability and statistics', 'biostatistics', 'operations research', 'quantitative techniques'
+                    ]),
+                    # 25. IS Strategy (IT334)
+                    (['IT334'], [
+                        'is strategy', 'information systems strategy', 'strategic information systems', 'it strategy', 'enterprise systems strategy'
+                    ]),
+                    # 26. Capstone and Research 1 & 2 (IT332, IT411)
+                    (['IT332'], [
                         'capstone and research 1', 'capstone project 1', 'capstone 1', 'undergraduate thesis 1',
                         'methods of research', 'it research', 'research methodology', 'technical research', 'thesis 1'
                     ]),
                     (['IT411'], [
                         'capstone and research 2', 'capstone project 2', 'capstone 2', 'undergraduate thesis 2', 'thesis defense', 'thesis 2'
                     ]),
-                    # 20. Practicum / OJT (IT412)
+                    # 27. Practicum / OJT (IT412)
                     (['IT412'], [
                         'ojt/practicum', 'practicum', 'on-the-job training', 'ojt', 'internship', 'industry practicum',
                         'supervised industrial training', 'industry internship', 'practicum course'
                     ]),
-                    # 21. Purposive Communication / English (ENGL031)
+                    # 28. Purposive Communication / English (ENGL031)
                     (['ENGL031'], [
                         'purposive communication', 'communication arts', 'english 1', 'english 2', 'oral communication',
                         'speech communication', 'technical writing', 'grammar and composition', 'study and thinking skills',
                         'business communication', 'writing in the discipline', 'college english', 'english plus', 'speech and oral communication',
                         'effective communication'
                     ]),
-                    # 22. Mathematics in the Modern World (MATH031)
+                    # 29. Mathematics in the Modern World (MATH031)
                     (['MATH031'], [
                         'mathematics in the modern world', 'college algebra', 'general mathematics', 'advance algebra',
                         'trigonometry', 'elementary statistics', 'contemporary mathematics', 'differential calculus',
                         'integral calculus', 'basic calculus', 'applied mathematics', 'business mathematics', 'college algebra and trigonometry'
                     ]),
-                    # 23. Readings in Philippine History / Social Sciences (SOCSCI031)
+                    # 30. Readings in Philippine History / Social Sciences (SOCSCI031, SOCSCI032)
                     (['SOCSCI031'], [
                         'readings in philippine history', 'philippine history', 'philippine history and government',
                         'philippine government and constitution', 'social science 1', 'social science 2', 'society and culture',
                         'general sociology', 'philippine governance', 'politics and governance', 'philippine history with politics and governance',
                         'philippine political and social life'
                     ]),
-                    # 24. Understanding the Self (PSYCH031)
+                    (['SOCSCI032'], [
+                        'the contemporary world', 'contemporary world', 'globalization', 'global culture'
+                    ]),
+                    # 31. Understanding the Self (PSYCH031)
                     (['PSYCH031'], [
                         'understanding the self', 'general psychology', 'intro to psychology', 'personality development',
                         'human behavior', 'general psychology with drug education'
                     ]),
-                    # 25. Rizal Course (RIZAL031)
+                    # 32. Rizal Course (RIZAL031)
                     (['RIZAL031'], [
                         'the life and works of rizal', 'life and works of rizal', 'rizal course', 'rizal', 'rizals life and works'
                     ]),
-                    # 26. Ethics / Philosophy / Values (PHILO031)
+                    # 33. Ethics / Philosophy / Values (PHILO031)
                     (['PHILO031'], [
                         'ethics', 'moral philosophy', 'professional ethics', 'ethics in it', 'basic christian doctrine 1',
                         'christian doctrine', 'religious education', 'values education', 'logic and critical thinking',
                         'philosophy of man', 'logic', 'critical thinking', 'christian living'
                     ]),
-                    # 27. Science, Technology and Society (STS031)
+                    # 34. Science, Technology and Society (STS031)
                     (['STS031'], [
                         'science, technology and society', 'science technology and society', 'sts', 'environmental science',
                         'general science', 'earth science', 'ecology', 'biological science', 'physical science'
                     ]),
-                    # 28. NSTP 1 & 2 (NSTP111, NSTP112)
+                    # 35. Art Appreciation (HUM031)
+                    (['HUM031'], [
+                        'art appreciation', 'humanities', 'humanities 1', 'intro to art', 'arts and society'
+                    ]),
+                    # 36. NSTP 1 & 2 (NSTP111, NSTP112)
                     (['NSTP111'], [
                         'national service training program 1', 'nstp 1', 'cwts 1', 'rotc 1', 'nstp i', 'civic welfare training service 1', 'military science 1'
                     ]),
                     (['NSTP112'], [
                         'national service training program 2', 'nstp 2', 'cwts 2', 'rotc 2', 'nstp ii', 'civic welfare training service 2', 'military science 2'
                     ]),
-                    # 29. Physical Education / PATHFit 1-4 (PE103, PE104, PE205, PE206)
+                    # 37. Physical Education / PATHFit 1-4 (PE103, PE104, PE205, PE206)
                     (['PE103'], [
                         'pathfit 1', 'physical education 1', 'pe 1', 'physical fitness', 'pe i', 'self testing activities',
                         'physical fitness and gymnastics', 'movement competency'
@@ -977,16 +1022,6 @@ Rules:
                     ]),
                     (['PE206'], [
                         'pathfit 4', 'physical education 4', 'pe 4', 'team sports', 'pe iv', 'basketball', 'volleyball'
-                    ]),
-                    # 30. Analytics / Technopreneurship / Quantitative Methods (CSIT385, IT317, CSIT212)
-                    (['CSIT385'], [
-                        'data analytics', 'data analytics 1', 'data analysis', 'business analytics', 'data science fundamentals', 'data mining'
-                    ]),
-                    (['IT317'], [
-                        'technopreneurship', 'entrepreneurship', 'techno entrepreneurship', 'business planning', 'principles of management'
-                    ]),
-                    (['CSIT212'], [
-                        'quantitative methods', 'statistics', 'probability and statistics', 'biostatistics', 'operations research', 'quantitative techniques'
                     ]),
                 ]
 
@@ -1094,11 +1129,13 @@ EVALUATION GUIDELINES:
 1. Academic Equivalency: Different Philippine universities (e.g. AMA, STI, DLSU, UST, State Universities, TESDA) use differing course codes/names for identical core competencies.
 2. Common Course Equivalents:
    - "Structured Programming" / "PROG 1" / "Turbo C" / "Logic Formulation" -> CSIT121 Fundamentals of Programming
-   - "Object-Oriented Programming" / "PROG 2" / "Java Programming" -> CSIT201 Intermediate Programming or CSIT221 Object-Oriented Programming 1
+   - "Intermediate Programming" / "PROG 2" -> CSIT122 Intermediate Programming
+   - "Object-Oriented Programming" / "Java Programming" -> CSIT227 Object-oriented Programming 1 or CSIT228 Object-oriented Programming 2
    - "Database Management Systems" / "DB MGT SYS" / "SQL Fundamentals" -> CSIT226 Information Management 1
    - "Data Communications & Networking" / "DATA COMM & NET" / "Cisco 1" -> IT227 Networking 1
-   - "Computer Hardware & Servicing" / "PC Troubleshooting" / "CSS NC II" -> CSIT112 Introduction to Computer Systems
-   - "Web Page Design & Development" / "Internet Concepts" -> CSIT238 Platform-based Development 2 (Web)
+   - "Computer Hardware & Servicing" / "PC Troubleshooting" / "CSS NC II" -> CS132 Introduction to Computer Systems
+   - "Discrete Mathematics" / "Discrete Math" -> CSIT112 Discrete Structures 1
+   - "Web Page Design & Development" / "Internet Concepts" -> CSIT201 Platform-based Development 2 (Web)
    - "College Algebra" / "Trigonometry" -> MATH031 Mathematics in the Modern World
    - "Grammar & Composition" / "Communication Arts" -> ENGL031 Purposive Communication
 3. Provide an audit-ready accredited rationale explaining the competency equivalence.
@@ -1111,7 +1148,7 @@ Output: [{{"curriculum_code": "CSIT121", "confidence": 95, "reasoning": "Equival
 
 Example 2:
 TOR: Code: "IT 202", Title: "SYS AN & DES", Units: 3
-Output: [{{"curriculum_code": "IT344", "confidence": 92, "reasoning": "Equivalent academic competency: Systems Analysis and Design directly satisfies IT344 Systems Integration and Architecture 1 requirements"}}]
+Output: [{{"curriculum_code": "IT342", "confidence": 92, "reasoning": "Equivalent academic competency: Systems Analysis and Design directly satisfies IT342 Systems Integration and Architecture 1 requirements"}}]
 
 Example 3:
 TOR: Code: "AGRI 101", Title: "Crop Science", Units: 3
@@ -1274,7 +1311,7 @@ For ETEEAP credit, consider:
 - Job description shows practical application of subject knowledge
 
 Return ONLY a valid JSON array sorted by confidence:
-[{{"curriculum_code": "IT213", "confidence": 85, "reasoning": "..."}}]
+[{{"curriculum_code": "CSIT321", "confidence": 85, "reasoning": "..."}}]
 
 Include matches with confidence >= 60. Return [] if no credit-worthy matches.
 Just the JSON array, no explanations."""
