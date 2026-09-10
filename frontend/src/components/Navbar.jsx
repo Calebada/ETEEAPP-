@@ -51,7 +51,7 @@ export const Navbar = () => {
                 <GraduationCap className="w-6 h-6 text-white" />
               </div>
               <div>
-                <div className="font-serif font-bold text-xl text-maroon leading-none">ACREDIA</div>
+                <div className="font-serif font-bold text-xl text-maroon leading-none">ACCREDIA</div>
                 <div className="text-xs text-gray-500 uppercase tracking-wider">CIT-U</div>
               </div>
             </Link>

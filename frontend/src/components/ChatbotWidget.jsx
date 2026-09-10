@@ -11,7 +11,7 @@ export const ChatbotWidget = () => {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      content: `Hello${user ? ', ' + user.full_name.split(' ')[0] : ''}! I'm AcrediaBot. How can I help you with your ETEEAP application today?`
+      content: `Hello${user ? ', ' + user.full_name.split(' ')[0] : ''}! I'm AccrediaBot. How can I help you with your ETEEAP application today?`
     }
   ]);
   const [input, setInput] = useState('');
@@ -82,7 +82,7 @@ export const ChatbotWidget = () => {
                 <MessageCircle className="w-4 h-4 text-gray-900" />
               </div>
               <div>
-                <div className="font-serif font-semibold">AcrediaBot</div>
+                <div className="font-serif font-semibold">AccrediaBot</div>
                 <div className="text-xs text-gray-200">ETEEAP Assistant</div>
               </div>
             </div>

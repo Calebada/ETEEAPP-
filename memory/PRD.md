@@ -1,7 +1,7 @@
-# ACREDIA - CIT-U AI Credit Evaluation System
+# ACCREDIA - CIT-U AI Credit Evaluation System
 
 ## Original Problem Statement
-Build ACREDIA, a CIT-University AI-powered credit evaluation system for ETEEAP (Expanded Tertiary Education Equivalency and Accreditation Program) with:
+Build ACCREDIA, a CIT-University AI-powered credit evaluation system for ETEEAP (Expanded Tertiary Education Equivalency and Accreditation Program) with:
 - **Frontend**: React.js (Vite-style with create-react-app)
 - **Backend**: Django Python with REST framework
 - **Database**: Supabase PostgreSQL
@@ -18,7 +18,7 @@ Build ACREDIA, a CIT-University AI-powered credit evaluation system for ETEEAP (
 - Receives AI-recommended program based on work experience
 - Views evaluation results with color-coded matches
 - Downloads accreditation report
-- Chats with AcrediaBot for help
+- Chats with AccrediaBot for help
 
 ### 2. Department Chair (Evaluator role)
 - Reviews submitted applications queue
@@ -49,7 +49,7 @@ Build ACREDIA, a CIT-University AI-powered credit evaluation system for ETEEAP (
 9. **subject_matches** - AI matches with source field (tor/work_experience), confidence, status
 10. **predictions** - Semester-by-semester study plan
 11. **reports** - Generated evaluation reports
-12. **chat_conversations** + **chat_messages** - AcrediaBot chat history
+12. **chat_conversations** + **chat_messages** - AccrediaBot chat history
 
 ### Backend (Django + DRF)
 - **Auth**: JWT via SimpleJWT, register/login/google_auth/me endpoints
@@ -58,7 +58,7 @@ Build ACREDIA, a CIT-University AI-powered credit evaluation system for ETEEAP (
   - `/api/recommend-course/` - AI program recommendation
   - `/api/upload/document/` - Document upload + auto-OCR for TORs
   - `/api/application/process/` - Full AI evaluation (TOR matching + work matching + predictions)
-  - `/api/chat/message/` - AcrediaBot chat
+  - `/api/chat/message/` - AccrediaBot chat
 - **AI Service**: Gemini 2.5 Pro via EMERGENT_LLM_KEY for production reliability
 
 ### Frontend (React + React Router)
@@ -66,7 +66,7 @@ Build ACREDIA, a CIT-University AI-powered credit evaluation system for ETEEAP (
 - **Applicant**: Dashboard, Apply (4-step wizard), Evaluation results, PDF report download
 - **Department Chair**: Review Queue, Side-by-side review with TOR/Work tabs
 - **Admin**: Stats dashboard, applications list, curriculum view
-- **Global**: Floating AcrediaBot chatbot widget
+- **Global**: Floating AccrediaBot chatbot widget
 
 ## What's Been Implemented (May 22, 2026)
 
@@ -100,7 +100,7 @@ Build ACREDIA, a CIT-University AI-powered credit evaluation system for ETEEAP (
 - Side-by-side review with applicant info + matches panel
 - Run/Re-run AI Evaluation button
 - PDF report generation with jsPDF
-- Floating AcrediaBot chatbot on every page
+- Floating AccrediaBot chatbot on every page
 - Admin dashboard with curriculum view
 
 ### ✅ Testing

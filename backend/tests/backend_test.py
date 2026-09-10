@@ -1,5 +1,5 @@
 """
-ACREDIA Backend API Tests
+ACCREDIA Backend API Tests
 Tests cover: auth, programs, curriculum, applications, work experience,
 documents, subject matches, predictions, dashboard stats, chat (AI).
 """
@@ -290,7 +290,7 @@ class TestAI:
     def test_chat_message_unauth(self, session):
         # chat_message has AllowAny perms
         r = session.post(f"{API}/chat/message/", json={
-            "message": "Hello, what is ACREDIA?"
+            "message": "Hello, what is ACCREDIA?"
         }, timeout=60)
         assert r.status_code == 200, r.text
         d = r.json()

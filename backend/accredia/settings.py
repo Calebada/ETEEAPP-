@@ -37,7 +37,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'acredia.urls'
+ROOT_URLCONF = 'accredia.urls'
 
 TEMPLATES = [
     {
@@ -55,7 +55,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'acredia.wsgi.application'
+WSGI_APPLICATION = 'accredia.wsgi.application'
 
 if DATABASE_URL:
     parsed_database_url = urlparse(DATABASE_URL)

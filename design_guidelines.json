@@ -59,7 +59,7 @@
     },
     "logo": {
       "url": "https://static.prod-images.emergentagent.com/jobs/99efe192-1f37-4bf2-8dc2-0ee6bd12bd94/images/95689f9ee6f8900936a9a9e7a8df18bdd3690e99ac2a074d2a77cb7d3eb956af.png",
-      "description": "Acredia modern university shield logo"
+      "description": "Accredia modern university shield logo"
     },
     "university_students": {
       "url": "https://images.unsplash.com/photo-1576495199011-eb94736d05d6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODh8MHwxfHNlYXJjaHwxfHx1bml2ZXJzaXR5JTIwY2FtcHVzJTIwc3R1ZGVudHN8ZW58MHx8fHwxNzc5NDIwNTk2fDA&ixlib=rb-4.1.0&q=85",
@@ -92,7 +92,7 @@
     "Use pure HTML + Tailwind for marketing/landing page layouts. Avoid over-using Shadcn layout components like Cards for creative sections.",
     "For the Applicant and Evaluator dashboards, use Shadcn tables, select, tabs, and modals.",
     "Implement the side-by-side evaluator panel utilizing CSS Grid (grid-cols-2).",
-    "Integrate the provided Acredia logo in the top left navigation bar.",
+    "Integrate the provided Accredia logo in the top left navigation bar.",
     "Ensure all buttons have specific data-testid attributes (e.g., data-testid='upload-tor-button').",
     "Use Playfair Display for all main headers (h1, h2, h3) and Inter for all body text.",
     "Color code the Match results: Green for >= 85, Yellow for 60-84, Red for < 60.",

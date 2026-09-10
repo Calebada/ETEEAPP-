@@ -55,7 +55,7 @@ export const EvaluationPage = () => {
     
     pdf.setFontSize(20);
     pdf.setTextColor(122, 30, 43);
-    pdf.text('ACREDIA Evaluation Report', 20, 20);
+    pdf.text('ACCREDIA Evaluation Report', 20, 20);
     
     pdf.setFontSize(10);
     pdf.setTextColor(100);
@@ -93,7 +93,7 @@ export const EvaluationPage = () => {
 
     }
     
-    pdf.save(`ACREDIA_Report_${application.id.slice(0, 8)}.pdf`);
+    pdf.save(`ACCREDIA_Report_${application.id.slice(0, 8)}.pdf`);
     toast.success('Report downloaded');
   };
 

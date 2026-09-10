@@ -1,70 +1,90 @@
-# Getting Started with Create React App
+# ACCREDIA — Frontend
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+React.js frontend for the **ACCREDIA** AI-Assisted ETEEAP Enrollment System (CIT-U).
 
-## Available Scripts
+---
 
-In the project directory, you can run:
+## 🧰 Tech Stack
 
-### `npm start`
+- **React 19** — UI framework
+- **Create React App + CRACO** — build tooling
+- **Tailwind CSS** — styling
+- **shadcn/ui (Radix)** — component library
+- **React Router** — routing
+- **Axios** — API communication
+- **Recharts** — charts
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+---
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## 📋 Prerequisites
 
-### `npm test`
+- **Node.js 18+** (or current LTS)
+- **npm** or **Yarn**
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+Check your versions:
 
-### `npm run build`
+```powershell
+node --version
+npm  --version
+```
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+---
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## 🚀 Setup & Run
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+### 1. Install dependencies
 
-### `npm run eject`
+```bash
+cd frontend
+npm install        # or: yarn install
+```
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+> A `.npmrc` file is committed with `legacy-peer-deps=true` to keep installs conflict-free with React 19. No action needed.
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+### 2. Configure the environment
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+Create a `.env` file in `frontend/`:
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+```text
+REACT_APP_BACKEND_URL=http://localhost:8000
+```
 
-## Learn More
+- `REACT_APP_BACKEND_URL` — URL of the running backend (no trailing slash).
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+> ⚠️ CRA bakes env vars **at build time**. If you change this later, rebuild/redeploy.
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+### 3. Run the development server
 
-### Code Splitting
+```bash
+cd frontend
+npm start
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+Open [http://localhost:3000](http://localhost:3000). The page auto-reloads on edits and shows lint errors in the console.
 
-### Analyzing the Bundle Size
+### 4. Build for production
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+```bash
+cd frontend
+npm run build
+```
 
-### Making a Progressive Web App
+Output is emitted to the `build/` folder — a static site ready to deploy (serving this folder is enough; no server-side rendering).
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+---
 
-### Advanced Configuration
+## 🌐 Deploying to Vercel
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+1. Import the repository in Vercel.
+2. Set the **Root Directory** to `frontend`.
+3. **Build Command:** `npm run build` · **Output Directory:** `build`.
+4. Add the environment variable `REACT_APP_BACKEND_URL` pointing to your deployed backend.
+5. Deploy — every push to `main` automatically triggers a new production deployment, and any branch/PR gets a preview URL.
 
-### Deployment
+The committed `frontend/vercel.json` contains SPA rewrites so that refreshing deep links (e.g. `/login`) does not 404.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+---
 
-### `npm run build` fails to minify
+## 📁 Notes
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+- Full project overview and architecture live in the **root [`README.md`](../README.md)**.
