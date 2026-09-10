@@ -62,8 +62,21 @@ export const AuthProvider = ({ children }) => {
     window.location.href = '/';
   };
 
+  const updateUserData = (updatedUser, newTokens = null) => {
+    if (newTokens?.access) {
+      localStorage.setItem('access_token', newTokens.access);
+    }
+    if (newTokens?.refresh) {
+      localStorage.setItem('refresh_token', newTokens.refresh);
+    }
+    if (updatedUser) {
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      setUser(updatedUser);
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, googleLogin, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, googleLogin, logout, updateUserData }}>
       {children}
     </AuthContext.Provider>
   );

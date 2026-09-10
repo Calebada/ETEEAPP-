@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/auth-context';
 import { Button } from './ui/button';
-import { GraduationCap, LogOut, LayoutDashboard, FileText, Users, Settings } from 'lucide-react';
+import { GraduationCap, LogOut, LayoutDashboard, FileText, Users, Settings, User } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger
@@ -21,11 +21,13 @@ export const Navbar = () => {
       return [
         { label: 'Dashboard', path: '/applicant', icon: LayoutDashboard },
         { label: 'My Applications', path: '/applicant/applications', icon: FileText },
+        { label: 'Profile', path: '/profile', icon: User },
       ];
     }
     if (user.role === 'evaluator') {
       return [
         { label: 'Review Queue', path: '/evaluator', icon: LayoutDashboard },
+        { label: 'Profile', path: '/profile', icon: User },
       ];
     }
     if (user.role === 'admin') {
@@ -33,6 +35,7 @@ export const Navbar = () => {
         { label: 'Dashboard', path: '/admin', icon: LayoutDashboard },
         { label: 'Users', path: '/admin/users', icon: Users },
         { label: 'Curriculum', path: '/admin/curriculum', icon: Settings },
+        { label: 'Profile', path: '/profile', icon: User },
       ];
     }
     return [];
@@ -99,10 +102,18 @@ export const Navbar = () => {
                     </div>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuLabel>My Account</DropdownMenuLabel>
+                <DropdownMenuContent align="end" className="w-60">
+                  <DropdownMenuLabel>
+                    <div className="font-semibold text-gray-900">{user.full_name}</div>
+                    <div className="text-[11px] text-gray-500 font-normal truncate">{user.email}</div>
+                  </DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem className="text-red-600" onClick={logout} data-testid="logout-button">
+                  <DropdownMenuItem onClick={() => navigate('/profile')} data-testid="profile-menu-button" className="cursor-pointer">
+                    <User className="w-4 h-4 mr-2 text-maroon" />
+                    Profile & Security
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem className="text-red-600 cursor-pointer" onClick={logout} data-testid="logout-button">
                     <LogOut className="w-4 h-4 mr-2" />
                     Logout
                   </DropdownMenuItem>

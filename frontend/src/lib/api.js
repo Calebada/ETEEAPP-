@@ -40,6 +40,8 @@ export const authApi = {
   login: (data) => apiClient.post('/auth/login/', data),
   googleAuth: (token) => apiClient.post('/auth/google/', { token }),
   me: () => apiClient.get('/auth/me/'),
+  updateProfile: (data) => apiClient.patch('/auth/profile/', data),
+  changePassword: (data) => apiClient.post('/auth/change-password/', data),
 };
 
 export const applicationApi = {

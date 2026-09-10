@@ -11,6 +11,7 @@ import EvaluationPage from './pages/EvaluationPage';
 import EvaluatorDashboard from './pages/EvaluatorDashboard';
 import EvaluatorReviewPage from './pages/EvaluatorReviewPage';
 import AdminDashboard from './pages/AdminDashboard';
+import ProfilePage from './pages/ProfilePage';
 import { Loader2 } from 'lucide-react';
 import './index.css';
 
@@ -118,9 +119,10 @@ function App() {
               <AdminDashboard />
             </ProtectedRoute>
           } />
-          <Route path="/admin/curriculum" element={
-            <ProtectedRoute allowedRoles={['admin']}>
-              <AdminDashboard />
+          {/* Shared Profile & Security Route */}
+          <Route path="/profile" element={
+            <ProtectedRoute allowedRoles={['applicant', 'evaluator', 'admin']}>
+              <ProfilePage />
             </ProtectedRoute>
           } />
           

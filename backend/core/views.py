@@ -237,10 +237,53 @@ def google_auth(request):
     except ValueError as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-@api_view(['GET'])
+@api_view(['GET', 'PATCH', 'PUT'])
 @permission_classes([IsAuthenticated])
 def me(request):
+    if request.method in ['PATCH', 'PUT']:
+        full_name = request.data.get('full_name')
+        if not full_name or not str(full_name).strip():
+            return Response({'error': 'Full name is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        user = request.user
+        user.full_name = str(full_name).strip()
+        user.save()
+        return Response(UserSerializer(user).data)
     return Response(UserSerializer(request.user).data)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    user = request.user
+    current_password = request.data.get('current_password')
+    new_password = request.data.get('new_password')
+    confirm_password = request.data.get('confirm_password')
+
+    if not new_password:
+        return Response({'error': 'New password is required.'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    if len(str(new_password)) < 8:
+        return Response({'error': 'New password must be at least 8 characters long.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if confirm_password and new_password != confirm_password:
+        return Response({'error': 'New password and confirmation do not match.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # If user has a usable password, check current_password
+    if user.has_usable_password():
+        if not current_password:
+            return Response({'error': 'Current password is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not user.check_password(current_password):
+            return Response({'error': 'Current password is incorrect.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user.set_password(new_password)
+    user.save()
+
+    refresh = RefreshToken.for_user(user)
+    return Response({
+        'message': 'Password updated successfully.',
+        'access': str(refresh.access_token),
+        'refresh': str(refresh),
+        'user': UserSerializer(user).data
+    })
 
 class ProgramViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Program.objects.all()
