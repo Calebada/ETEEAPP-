@@ -202,6 +202,10 @@ class TORSubject(models.Model):
     title = models.CharField(max_length=255)
     grade = models.CharField(max_length=10)
     units = models.IntegerField()
+    year_level = models.IntegerField(default=1)
+    semester = models.IntegerField(default=1)
+    school_year = models.CharField(max_length=50, blank=True, default='')
+    term_label = models.CharField(max_length=100, blank=True, default='')
     raw_text = models.TextField(blank=True)
     
     class Meta:

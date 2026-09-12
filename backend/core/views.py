@@ -759,6 +759,11 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
 
         return Response(SubjectMatchSerializer(match).data)
 
+    def destroy(self, request, *args, **kwargs):
+        if request.user.role not in ['evaluator', 'admin']:
+            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        return super().destroy(request, *args, **kwargs)
+
 class ChatConversationViewSet(viewsets.ModelViewSet):
     serializer_class = ChatConversationSerializer
     permission_classes = [AllowAny]

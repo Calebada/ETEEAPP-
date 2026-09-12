@@ -230,18 +230,30 @@ def process_tor_ocr_sync(doc_id, image_base64):
         doc.ocr_raw = json.dumps(subjects_data) if subjects_data else ''
         doc.extracted_text = json.dumps(subjects_data) if subjects_data else ''
         
+        # Clear old TOR subject records for this application to prevent duplicates
+        TORSubject.objects.filter(application=doc.application).delete()
+
         # Create TOR subject records
+        created_count = 0
         for subject_data in (subjects_data or []):
-            if subject_data.get('code') and subject_data.get('code') != 'UNCLEAR':
+            code = (subject_data.get('code') or '').strip()
+            title = (subject_data.get('title') or '').strip()
+            if code and code != 'UNCLEAR' and title:
                 TORSubject.objects.create(
                     application=doc.application,
-                    code=subject_data.get('code', ''),
-                    title=subject_data.get('title', ''),
-                    grade=str(subject_data.get('grade', '')),
-                    units=subject_data.get('units', 0) or 0,
+                    code=code,
+                    title=title,
+                    grade=str(subject_data.get('grade', 'Passed')),
+                    units=float(subject_data.get('units', 0) or 0),
+                    year_level=int(subject_data.get('year_level', 1) or 1),
+                    semester=int(subject_data.get('semester', 1) or 1),
+                    school_year=str(subject_data.get('school_year', '') or ''),
+                    term_label=str(subject_data.get('term_label', '') or ''),
                     raw_text=json.dumps(subject_data)
                 )
+                created_count += 1
         
+        print(f"Successfully processed TOR doc {doc_id}: Extracted {created_count} subjects.")
         doc.ocr_status = 'completed'
         doc.save()
     
@@ -374,17 +386,17 @@ def process_application(request):
 
 
 def _match_single_tor_subject(tor_subject, program, curriculum_list):
-    """Match a single TOR subject against the curriculum. Runs in a thread."""
+    """Match a single TOR subject against the curriculum (sync)."""
     tor_data = {
         'code': tor_subject.code,
         'title': tor_subject.title,
         'units': tor_subject.units
     }
-    return async_to_sync(gemini_service.match_subject)(tor_data, curriculum_list)
+    return gemini_service.match_subject_sync(tor_data, curriculum_list)
 
 
 def run_full_evaluation_sync(application_id):
-    """Run full AI evaluation - SYNC version with sync ORM and async_to_sync for Gemini calls"""
+    """Run full AI evaluation - ultra-fast sync evaluation"""
     application = Application.objects.get(id=application_id)
 
     reviewed_statuses = ['approved', 'rejected', 'overridden']
@@ -400,14 +412,14 @@ def run_full_evaluation_sync(application_id):
     # Step 1: Course Recommendation based on work experience
     if work_experiences_list:
         try:
-            recommendation = async_to_sync(gemini_service.recommend_program)(work_experiences_list)
+            recommendation = gemini_service.recommend_program_sync(work_experiences_list)
             application.recommended_program = recommendation.get('program', 'BSIT')
             application.recommendation_reasoning = recommendation.get('reasoning', '')
             application.save()
         except Exception as e:
             print(f"Recommendation error: {e}")
     
-    # Step 2: Match TOR subjects to curriculum (PARALLEL PROCESSING)
+    # Step 2: Match TOR subjects to curriculum
     # Exclude curriculum subjects that have already been reviewed/approved for this application
     approved_curriculum_ids = set(
         SubjectMatch.objects.filter(
@@ -417,108 +429,109 @@ def run_full_evaluation_sync(application_id):
         ).values_list('curriculum_subject_id', flat=True)
     )
     
+    all_curriculum_subjects = list(CurriculumSubject.objects.filter(program=application.program))
+    curriculum_obj_map = {
+        cs.code.upper().replace(' ', '').replace('-', ''): cs
+        for cs in all_curriculum_subjects
+    }
+    
+    curriculum_qs = [cs for cs in all_curriculum_subjects if cs.id not in approved_curriculum_ids]
+    curriculum_list = [
+        {
+            'id': str(cs.id),
+            'code': cs.code,
+            'title': cs.title,
+            'description': cs.description,
+            'units': cs.units
+        }
+        for cs in curriculum_qs
+    ]
+    
     tor_subjects = list(TORSubject.objects.filter(application=application))
-    curriculum_qs = CurriculumSubject.objects.filter(program=application.program).exclude(id__in=approved_curriculum_ids)
-    curriculum_list = list(curriculum_qs.values('id', 'code', 'title', 'description', 'units'))
     
-    # Convert UUIDs to strings for JSON serialization
-    for c in curriculum_list:
-        c['id'] = str(c['id'])
-    
-    # Filter to only process pending TOR subjects
-    tor_subjects_to_process = []
-    for tor_subject in tor_subjects:
-        reviewed_match = SubjectMatch.objects.filter(
-            application=application,
-            tor_subject=tor_subject,
-            status__in=reviewed_statuses,
-        ).first()
-        if reviewed_match:
-            continue
-        
-        # Delete pending matches to reprocess
+    # Pre-fetch reviewed matches in 1 query
+    reviewed_tor_subject_ids = set(
         SubjectMatch.objects.filter(
             application=application,
-            tor_subject=tor_subject,
-            status__in=pending_statuses,
-        ).delete()
-        
-        tor_subjects_to_process.append(tor_subject)
-    
-    # Process TOR subjects in parallel (max 5 concurrent threads)
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {
-            executor.submit(_match_single_tor_subject, tor_subject, application.program, curriculum_list): tor_subject
-            for tor_subject in tor_subjects_to_process
-        }
-        
-        for future in as_completed(futures):
-            tor_subject = futures[future]
-            try:
-                matches = future.result()
+            status__in=reviewed_statuses,
+            tor_subject__isnull=False
+        ).values_list('tor_subject_id', flat=True)
+    )
+
+    # Delete all pending matches to reprocess in 1 fast query
+    SubjectMatch.objects.filter(
+        application=application,
+        status__in=pending_statuses,
+    ).delete()
+
+    tor_subjects_to_process = [s for s in tor_subjects if s.id not in reviewed_tor_subject_ids]
+    matches_to_create = []
+
+    # Process TOR subjects using fast matching engine
+    for tor_subject in tor_subjects_to_process:
+        try:
+            matches = _match_single_tor_subject(tor_subject, application.program, curriculum_list)
+            
+            if matches and len(matches) > 0:
+                best_match = matches[0]
+                norm_target_code = (best_match.get('curriculum_code') or '').upper().replace(' ', '').replace('-', '')
+                curriculum_subj = curriculum_obj_map.get(norm_target_code)
                 
-                if matches and len(matches) > 0:
-                    best_match = matches[0]
-                    curriculum_subj = CurriculumSubject.objects.filter(
-                        code=best_match['curriculum_code'],
-                        program=application.program
-                    ).first()
-                    
-                    # Enforce Unit Sufficiency Rule: Applicant units must be >= curriculum units
-                    if tor_subject.units and curriculum_subj and curriculum_subj.units and tor_subject.units < curriculum_subj.units:
-                        SubjectMatch.objects.create(
-                            application=application,
-                            tor_subject=tor_subject,
-                            curriculum_subject=None,
-                            source='tor',
-                            confidence=0,
-                            status='pending',
-                            matching_reason=f'Insufficient units: TOR subject has {tor_subject.units} unit(s), but {curriculum_subj.code} requires {curriculum_subj.units} unit(s).'
-                        )
-                    else:
-                        SubjectMatch.objects.create(
-                            application=application,
-                            tor_subject=tor_subject,
-                            curriculum_subject=curriculum_subj,
-                            source='tor',
-                            confidence=float(best_match.get('confidence', 0)),
-                            matching_reason=best_match.get('reasoning', ''),
-                            status='pending'
-                        )
-                else:
-                    SubjectMatch.objects.create(
+                # Enforce Unit Sufficiency Rule: Applicant units must be >= curriculum units
+                if tor_subject.units and curriculum_subj and curriculum_subj.units and tor_subject.units < curriculum_subj.units:
+                    matches_to_create.append(SubjectMatch(
                         application=application,
                         tor_subject=tor_subject,
                         curriculum_subject=None,
                         source='tor',
                         confidence=0,
                         status='pending',
-                        matching_reason='No matching curriculum subject found'
-                    )
-            except Exception as e:
-                print(f"TOR matching error for {tor_subject.code}: {e}")
-                # Create unmatched entry on error
-                SubjectMatch.objects.create(
+                        matching_reason=f'Insufficient units: TOR subject has {tor_subject.units} unit(s), but {curriculum_subj.code} requires {curriculum_subj.units} unit(s).'
+                    ))
+                else:
+                    matches_to_create.append(SubjectMatch(
+                        application=application,
+                        tor_subject=tor_subject,
+                        curriculum_subject=curriculum_subj,
+                        source='tor',
+                        confidence=float(best_match.get('confidence', 0)),
+                        matching_reason=best_match.get('reasoning', ''),
+                        status='pending'
+                    ))
+            else:
+                matches_to_create.append(SubjectMatch(
                     application=application,
                     tor_subject=tor_subject,
                     curriculum_subject=None,
                     source='tor',
                     confidence=0,
                     status='pending',
-                    matching_reason=f'Error: {str(e)}'
-                )
-    
-    # Step 3: Match work experience to curriculum
+                    matching_reason='No matching curriculum subject found'
+                ))
+        except Exception as e:
+            print(f"TOR matching error for {tor_subject.code}: {e}")
+            matches_to_create.append(SubjectMatch(
+                application=application,
+                tor_subject=tor_subject,
+                curriculum_subject=None,
+                source='tor',
+                confidence=0,
+                status='pending',
+                matching_reason=f'Error: {str(e)}'
+            ))
+
+    # Step 3: Match work experience to curriculum (UNLIMITED CREDITING)
+    # A single work experience role can match and credit multiple BSIT curriculum subjects.
+    reviewed_curriculum_ids = set(
+        SubjectMatch.objects.filter(
+            application=application,
+            status__in=reviewed_statuses
+        ).values_list('curriculum_subject_id', flat=True)
+    )
+
     for work_exp in work_exp_objects:
         try:
-            reviewed_work_match = SubjectMatch.objects.filter(
-                application=application,
-                work_experience=work_exp,
-                status__in=reviewed_statuses,
-            ).first()
-            if reviewed_work_match:
-                continue
-
+            # Delete only pending matches for this work experience to avoid duplicate suggestions
             SubjectMatch.objects.filter(
                 application=application,
                 work_experience=work_exp,
@@ -531,25 +544,22 @@ def run_full_evaluation_sync(application_id):
                 'description': work_exp.job_description
             }
             
-            work_matches = async_to_sync(gemini_service.match_work_experience)(exp_data, curriculum_list)
+            work_matches = gemini_service.match_work_experience_sync(exp_data, curriculum_list)
             
-            for match in (work_matches or [])[:5]:
-                curriculum_subj = CurriculumSubject.objects.filter(
-                    code=match['curriculum_code'],
-                    program=application.program
-                ).first()
+            for match in (work_matches or [])[:10]:
+                norm_work_code = (match.get('curriculum_code') or '').upper().replace(' ', '').replace('-', '')
+                curriculum_subj = curriculum_obj_map.get(norm_work_code)
                 
-                if curriculum_subj:
-                    existing = SubjectMatch.objects.filter(
+                if curriculum_subj and curriculum_subj.id not in reviewed_curriculum_ids:
+                    # Ensure we don't assign the same curriculum subject twice in the same batch
+                    already_queued = any(m.curriculum_subject_id == curriculum_subj.id for m in matches_to_create)
+                    already_in_db = SubjectMatch.objects.filter(
                         application=application,
                         curriculum_subject=curriculum_subj,
-                    ).first()
-                    
-                    if existing and existing.status in reviewed_statuses:
-                        continue
+                    ).exists()
 
-                    if not existing:
-                        SubjectMatch.objects.create(
+                    if not already_queued and not already_in_db:
+                        matches_to_create.append(SubjectMatch(
                             application=application,
                             work_experience=work_exp,
                             curriculum_subject=curriculum_subj,
@@ -557,9 +567,13 @@ def run_full_evaluation_sync(application_id):
                             confidence=float(match.get('confidence', 0)),
                             matching_reason=match.get('reasoning', ''),
                             status='pending'
-                        )
+                        ))
         except Exception as e:
-            print(f"Work matching error: {e}")
+            print(f"Work matching error for {work_exp.job_title}: {e}")
+
+    # Bulk insert all matches in 1 ultra-fast transaction
+    if matches_to_create:
+        SubjectMatch.objects.bulk_create(matches_to_create)
     
     # Step 4: Generate prediction
     try:

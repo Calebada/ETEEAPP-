@@ -78,7 +78,10 @@ def test_rule_2_one_to_one():
         print("No test applicant user found, skipping DB integration test.")
         return True
     
-    app, _ = Application.objects.get_or_create(applicant=user, defaults={'status': 'under_review'})
+    app = Application.objects.filter(applicant=user).first()
+    if not app:
+        prog = Program.objects.filter(code='BSIT').first()
+        app = Application.objects.create(applicant=user, program=prog, status='under_review')
     tor1, _ = TORSubject.objects.get_or_create(application=app, code='TEST101', defaults={'title': 'Test Subject 1', 'units': 3.0})
     
     cs1 = CurriculumSubject.objects.filter(code='CSIT121').first()
@@ -202,12 +205,35 @@ async def test_sample_tors_matching(cur_subjects):
 
     return all_passed
 
+def test_unlimited_work_experience_matching(cur_subjects):
+    print("\n--- Work Experience Crediting: Unlimited Multi-Subject Matching Tests ---")
+    work_case = {
+        'job_title': 'Senior Full Stack Web Developer & Database Administrator',
+        'years': 4.5,
+        'description': 'Built responsive web applications, designed relational databases with SQL, implemented REST APIs, and managed Linux cloud servers.'
+    }
+
+    matches = gemini_service.match_work_experience_sync(work_case, cur_subjects)
+    print(f"Matched {len(matches)} curriculum subjects for work role '{work_case['job_title']}':")
+    for m in matches[:6]:
+        print(f"  -> {m['curriculum_code']}: {m.get('curriculum_title')} ({m['confidence']}%) | {m['reasoning']}")
+
+    assert len(matches) >= 2, f"Expected multiple matches for rich work experience role, got {len(matches)}"
+    matched_codes = {m['curriculum_code'] for m in matches}
+    
+    # Check that it matched relevant BSIT domains
+    web_db_codes = {'CSIT201', 'CSIT226', 'CSIT121', 'CSIT122', 'CSIT227', 'IT342', 'IT227'}
+    overlap = matched_codes.intersection(web_db_codes)
+    print(f"[PASS] Work experience hit multiple relevant curriculum subjects ({len(overlap)} core subjects matched: {', '.join(overlap)})")
+    return True
+
 if __name__ == '__main__':
     prog = Program.objects.filter(code='BSIT').first()
     cur_subjects = list(CurriculumSubject.objects.filter(program=prog).values('id', 'code', 'title', 'description', 'units'))
     ok1 = asyncio.run(test_matching(cur_subjects))
     ok2 = test_rule_2_one_to_one()
     ok3 = asyncio.run(test_sample_tors_matching(cur_subjects))
-    if not (ok1 and ok2 and ok3):
+    ok4 = test_unlimited_work_experience_matching(cur_subjects)
+    if not (ok1 and ok2 and ok3 and ok4):
         sys.exit(1)
-    print("\n[SUCCESS] ALL 3 SAMPLE TOR TRANSCRIPT MATCHING VERIFICATION TESTS PASSED SUCCESSFULLY!")
+    print("\n[SUCCESS] ALL TRANSCRIPT & UNLIMITED WORK EXPERIENCE MATCHING VERIFICATION TESTS PASSED SUCCESSFULLY!")

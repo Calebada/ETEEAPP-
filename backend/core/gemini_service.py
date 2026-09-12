@@ -3,6 +3,7 @@ import json
 import asyncio
 import base64
 import re
+import time
 from difflib import SequenceMatcher
 from functools import lru_cache
 from io import BytesIO
@@ -265,6 +266,57 @@ def _get_local_ocr_engine():
         return None
 
 
+def _reconstruct_page_lines_from_ocr(ocr_result, y_threshold=18):
+    """Spatially reconstruct horizontal tabular text lines from OCR bounding boxes."""
+    if not ocr_result:
+        return []
+
+    items = []
+    for item in ocr_result:
+        if not item or len(item) < 2:
+            continue
+        box = item[0]
+        text = str(item[1]).strip()
+        conf = float(item[2]) if len(item) > 2 else 1.0
+        if not text:
+            continue
+        try:
+            y_center = (box[0][1] + box[2][1]) / 2.0
+            x_left = box[0][0]
+            items.append({'text': text, 'y': y_center, 'x': x_left, 'conf': conf})
+        except (IndexError, TypeError):
+            continue
+
+    if not items:
+        return []
+
+    # Sort by Y ascending
+    items.sort(key=lambda it: it['y'])
+
+    lines = []
+    current_line = []
+    current_y = None
+
+    for item in items:
+        if current_y is None:
+            current_y = item['y']
+            current_line.append(item)
+        elif abs(item['y'] - current_y) <= y_threshold:
+            current_line.append(item)
+            current_y = sum(it['y'] for it in current_line) / len(current_line)
+        else:
+            current_line.sort(key=lambda it: it['x'])
+            lines.append("   ".join(it['text'] for it in current_line))
+            current_line = [item]
+            current_y = item['y']
+
+    if current_line:
+        current_line.sort(key=lambda it: it['x'])
+        lines.append("   ".join(it['text'] for it in current_line))
+
+    return lines
+
+
 def _ocr_image_bytes(file_bytes):
     engine = _get_local_ocr_engine()
     if engine is None or not file_bytes:
@@ -272,74 +324,68 @@ def _ocr_image_bytes(file_bytes):
 
     try:
         image = Image.open(BytesIO(file_bytes)).convert('RGB')
+        # Constrain dimensions to prevent ONNX memory overflow on huge scans
+        if image.width > 1600 or image.height > 1600:
+            image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
         result = engine(np.array(image))
         if isinstance(result, tuple):
             result = result[0]
 
-        lines = []
-        for item in result or []:
-            if isinstance(item, dict):
-                text = item.get('text') or item.get('transcription') or ''
-            elif isinstance(item, (list, tuple)) and len(item) >= 2:
-                text = item[1]
-            else:
-                text = ''
-
-            text = str(text).strip()
-            if text:
-                lines.append(text)
-
+        lines = _reconstruct_page_lines_from_ocr(result)
         return '\n'.join(lines)
     except Exception:
         return ''
 
 
-def _extract_text_from_pdf_bytes(file_bytes):
+def _extract_text_and_subjects_from_pdf_bytes(file_bytes):
     if fitz is None or not file_bytes:
-        return ''
+        return '', []
 
-    texts = []
+    all_lines = []
+    engine = _get_local_ocr_engine()
+
     try:
         pdf = fitz.open(stream=file_bytes, filetype='pdf')
     except Exception:
-        return ''
+        return '', []
 
     try:
         for page in pdf:
-            page_text = (page.get_text('text') or '').strip()
-            if page_text:
-                texts.append(page_text)
-                continue
+            native_text = (page.get_text('text') or '').strip()
 
-            engine = _get_local_ocr_engine()
-            if engine is None:
-                continue
+            # If page has substantial text, include native text lines
+            if len(native_text) > 100:
+                for line in native_text.splitlines():
+                    cleaned_line = line.strip()
+                    if cleaned_line:
+                        all_lines.append(cleaned_line)
 
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-            image = Image.frombytes('RGB', [pixmap.width, pixmap.height], pixmap.samples)
-            result = engine(np.array(image))
-            if isinstance(result, tuple):
-                result = result[0]
+            # Also render page with dynamic scale factor (up to 1600px) and run OCR for visual tables
+            if engine is not None:
+                try:
+                    max_dim = max(page.rect.width, page.rect.height) if (page.rect.width and page.rect.height) else 800
+                    scale = min(2.0, max(1.0, 1600.0 / max_dim))
+                    pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+                    image = Image.frombytes('RGB', [pixmap.width, pixmap.height], pixmap.samples)
+                    result = engine(np.array(image))
+                    if isinstance(result, tuple):
+                        result = result[0]
 
-            page_lines = []
-            for item in result or []:
-                if isinstance(item, dict):
-                    text = item.get('text') or item.get('transcription') or ''
-                elif isinstance(item, (list, tuple)) and len(item) >= 2:
-                    text = item[1]
-                else:
-                    text = ''
-
-                text = str(text).strip()
-                if text:
-                    page_lines.append(text)
-
-            if page_lines:
-                texts.append('\n'.join(page_lines))
+                    page_lines = _reconstruct_page_lines_from_ocr(result)
+                    all_lines.extend(page_lines)
+                except Exception as e:
+                    print(f"Error during page OCR: {e}")
     finally:
         pdf.close()
 
-    return '\n'.join(texts)
+    combined_text = '\n'.join(all_lines)
+    parsed_subjects = _parse_tor_subjects_from_text(combined_text)
+    return combined_text, parsed_subjects
+
+
+def _extract_text_from_pdf_bytes(file_bytes):
+    text, _ = _extract_text_and_subjects_from_pdf_bytes(file_bytes)
+    return text
 
 
 def _extract_local_text(file_bytes):
@@ -349,134 +395,260 @@ def _extract_local_text(file_bytes):
     if file_bytes.startswith(b'%PDF'):
         return _extract_text_from_pdf_bytes(file_bytes)
 
-    pdf_text = _extract_text_from_pdf_bytes(file_bytes)
-    if pdf_text:
-        return pdf_text
-
     return _ocr_image_bytes(file_bytes)
+
+
+# Comprehensive regex for course codes across Philippine colleges (ACLC, CITE, CIT-U, STI, AMA, DLSU, etc.)
+COURSE_CODE_REGEX = re.compile(
+    r'\b(?P<code>'
+    r'[A-Z]{2,6}\s*[-–—]?\s*\d{1,4}[A-Z]?'
+    r'|[A-Z]{2,4}\s*&\s*[A-Z]{2,4}\s*\d{1,4}'
+    r'|COMSK\d|COMFUN|ETHNS\d|NSTP\d{1,2}|PHYED\d|ALGBRA|INTPRO|SYMLOG|NET\d|COMPR\d|PUBSPK|PREVAL|BUSDEV|MULDEV|PROJMG|STCAB|TECWRT|WEBPD|SYSDES|ACCTGI|OJT|BAS|SEM\s*\d'
+    r')\b',
+    re.IGNORECASE
+)
+
+IGNORE_LINE_KEYWORDS = {
+    'transcript', 'registrar', 'entrance data', 'school attended', 'admission credential', 'admission status',
+    'date of graduation', 'student name', 'id number', 'birthdate', 'birthplace', 'personal data',
+    'preliminary education', 'grading system', 'remarks', 'date issued', 'prepared by', 'checked by',
+    'evaluator', 'not valid without', 'official transcript', 'subject description', 'course code',
+    'in-plant training', 'transcript closed', 'nothing follows', 'satisfactorily completed',
+    'we do ordinary', 'elementary', 'secondary', 'high school', 'national high school', 'officials',
+    'address', 'location', 'branch', 'issued by tesda', 'reproduction of the original', 'special order'
+}
+
+
+def _detect_term_header(line):
+    """
+    Detects if a line represents an academic term/semester header in a TOR.
+    Returns (year_level, semester, school_year) or None.
+    """
+    if not line or len(line) < 4:
+        return None
+
+    lower = line.lower()
+    
+    # Must look like a term/semester/school year line, and not be a course subject line
+    term_keywords = [
+        'semester', 'sem', 'trimester', 'tri', 'midyear', 'summer', 'school year', 
+        's.y.', 'a.y.', 'academic year', 'in-plant', 'dts', 'practicum', 
+        '1st year', '2nd year', '3rd year', '4th year', 
+        'first year', 'second year', 'third year', 'fourth year'
+    ]
+    if not any(k in lower for k in term_keywords):
+        return None
+
+    # Skip lines that are actually subject lines with units/grades or course descriptions
+    if COURSE_CODE_REGEX.search(line) and re.search(r'\b(?:\d\.\d|\d{2,3}%|passed|inc|drp)\b', lower):
+        return None
+
+    year_level = None
+    semester = None
+    school_year = ''
+
+    # Detect School Year: e.g. 2018-2019, 2018 - 2019, 2018/2019
+    sy_match = re.search(r'\b(20\d\d\s*[-–/]\s*20\d\d|19\d\d\s*[-–/]\s*19\d\d)\b', line)
+    if sy_match:
+        school_year = re.sub(r'\s+', '', sy_match.group(1)).replace('–', '-').replace('/', '-')
+
+    # Detect Year Level
+    if re.search(r'\b(?:1st|first|1|one|i)\s*(?:year|yr|level)\b', lower):
+        year_level = 1
+    elif re.search(r'\b(?:2nd|second|2|two|ii)\s*(?:year|yr|level)\b', lower):
+        year_level = 2
+    elif re.search(r'\b(?:3rd|third|3|three|iii)\s*(?:year|yr|level)\b', lower):
+        year_level = 3
+    elif re.search(r'\b(?:4th|fourth|4|four|iv)\s*(?:year|yr|level)\b', lower):
+        year_level = 4
+
+    # Detect Semester
+    if re.search(r'\b(?:1st|first|1|one|i)\s*(?:sem|semester|term|tri|trimester)\b', lower):
+        semester = 1
+    elif re.search(r'\b(?:2nd|second|2|two|ii)\s*(?:sem|semester|term|tri|trimester)\b', lower):
+        semester = 2
+    elif re.search(r'\b(?:3rd|third|3|three|iii)\s*(?:sem|semester|term|tri|trimester)\b', lower):
+        semester = 3
+    elif re.search(r'\b(?:summer|midyear|mid-year|in-plant|dts|practicum|ojt)\b', lower):
+        semester = 3
+
+    if year_level is not None or semester is not None or school_year:
+        return (year_level, semester, school_year)
+
+    return None
 
 
 def _parse_tor_subjects_from_text(text):
     subjects = []
     seen_codes = set()
+    raw_lines = (text or '').splitlines()
 
-    def _looks_like_grade(token):
-        return bool(re.fullmatch(r'(?:\d+(?:\.\d+)?)|A\+?|B\+?|C\+?|D\+?|F|P|PASSED|FAILED|INC|INCOMPLETE|DRP', token, re.IGNORECASE))
+    current_year = 1
+    current_sem = 1
+    current_sy = ''
+    subject_count_in_current_term = 0
 
-    def _looks_like_units(token):
-        return bool(re.fullmatch(r'\d+(?:\.\d+)?', token))
-
-    def _is_code_line(line):
-        return bool(re.fullmatch(r'[A-Z]{2,5}\s?-?\s?\d{2,4}[A-Z]?', line.strip(), re.IGNORECASE))
-
-    def _is_heading(line):
-        normalized = re.sub(r'\s+', '', line).lower()
-        return (
-            'semester' in normalized
-            or normalized in {'coursecode', 'coursecodeandnumber', 'coursetitle', 'grade', 'credits', 'andnumber', 'final', 'completion'}
-            or normalized.startswith('admissiondata')
-            or normalized.startswith('remarks')
-            or normalized.startswith('dateissued')
-            or normalized.startswith('issuedby')
-            or normalized.startswith('grading')
-            or normalized.startswith('note')
-        )
-
-    def _add_subject(code, title, units, grade=''):
-        code = re.sub(r'\s+', '', (code or '').upper())
-        title = re.sub(r'\s+', ' ', (title or '')).strip(' -:;|')
-        if not code or code in seen_codes or not title:
-            return
-        try:
-            units_val = int(float(units))
-        except (TypeError, ValueError):
-            units_val = 0
-        seen_codes.add(code)
-        subjects.append({
-            'code': code,
-            'title': title,
-            'grade': (grade or '').strip(),
-            'units': units_val,
-        })
-
-    normalized_lines = [re.sub(r'\s+', ' ', raw_line).strip() for raw_line in (text or '').splitlines()]
-    normalized_lines = [line for line in normalized_lines if line]
-
-    def _parse_compact_subject(line):
-        for pattern in (LOCAL_SUBJECT_PATTERN, LOCAL_SUBJECT_PATTERN_ALT):
-            match = pattern.search(line)
-            if match:
-                return {
-                    'code': match.group('code'),
-                    'title': match.group('title'),
-                    'units': match.group('units'),
-                    'grade': match.groupdict().get('grade', ''),
-                }
-        return None
-
-    i = 0
-    while i < len(normalized_lines):
-        line = normalized_lines[i]
-        if not line:
-            i += 1
+    for raw_line in raw_lines:
+        line = raw_line.strip()
+        if not line or len(line) < 3:
             continue
 
-        compact = _parse_compact_subject(line)
-        if compact:
-            _add_subject(compact['code'], compact['title'], compact['units'], compact['grade'])
-            i += 1
+        # Check for term/semester header
+        term_info = _detect_term_header(line)
+        if term_info:
+            hdr_yr, hdr_sem, hdr_sy = term_info
+            if hdr_yr is not None:
+                current_year = hdr_yr
+            elif hdr_sem == 1 and current_sem == 2:
+                current_year = min(4, current_year + 1)
+
+            if hdr_sem is not None:
+                current_sem = hdr_sem
+
+            if hdr_sy:
+                current_sy = hdr_sy
+            subject_count_in_current_term = 0
             continue
 
-        if _is_code_line(line):
-            code = line
-            title_parts = []
+        lower_line = line.lower()
+        if any(ign in lower_line for ign in IGNORE_LINE_KEYWORDS):
+            # If line is purely header/metadata without a course code, skip
+            if not COURSE_CODE_REGEX.search(line) or 'official' in lower_line or 'grading' in lower_line:
+                continue
+
+        code_matches = list(COURSE_CODE_REGEX.finditer(line))
+        if not code_matches:
+            continue
+
+        for code_match in code_matches:
+            code_raw = code_match.group('code').strip()
+            code_clean = re.sub(r'\s+', '', code_raw.upper())
+
+            if code_clean in {'PAGE', 'DATE', 'FORM', 'YEAR', 'TERM', 'CODE', 'UNIT', 'GRAD', 'NOTE', 'JUNE', 'MAY', 'APRIL', 'MARCH', 'SEAL'}:
+                continue
+
+            post_code_text = line[code_match.end():].strip()
+            if not post_code_text:
+                continue
+
+            # Clean and split trailing tokens
+            tokens = [re.sub(r'[^a-zA-Z0-9.\-/%]', '', t).strip('. ,;:') for t in post_code_text.split()]
+            tokens = [t for t in tokens if t]
+            if not tokens:
+                continue
+
+            title = ''
             grade = ''
-            units = '0'
-            j = i + 1
+            units = 0.0
+            grade_units_found = False
 
-            while j < len(normalized_lines):
-                candidate = normalized_lines[j]
+            if len(tokens) >= 2:
+                t_last = tokens[-1].rstrip('.')
+                t_prev = tokens[-2].rstrip('.')
 
-                if _is_code_line(candidate):
-                    # If we already have title text, the next code marks the end of this subject.
-                    if title_parts:
-                        break
-                    j += 1
-                    continue
+                # Case A: Grade followed by Units (e.g., "1.9   3.0" or "2.50   3" or "Passed   1.0")
+                is_grade_prev = bool(re.match(r'^(?:\d+(?:\.\d+)?%?|passed|pass|p|failed|inc|incomplete|drp|dropped|w)$', t_prev, re.IGNORECASE))
+                is_unit_last = bool(re.match(r'^\d+(?:\.\d+)?$', t_last))
 
-                if _is_heading(candidate):
-                    j += 1
-                    continue
+                if is_grade_prev and is_unit_last:
+                    grade = t_prev
+                    try:
+                        units = float(t_last)
+                    except ValueError:
+                        units = 0.0
+                    title = " ".join(tokens[:-2])
+                    grade_units_found = True
 
-                if _looks_like_grade(candidate) and title_parts and not grade:
-                    grade = candidate
-                    k = j + 1
-                    while k < len(normalized_lines):
-                        units_candidate = normalized_lines[k]
-                        if _is_heading(units_candidate):
-                            k += 1
-                            continue
-                        if _is_code_line(units_candidate):
-                            break
-                        if _looks_like_units(units_candidate):
-                            units = units_candidate
-                            j = k
-                            break
-                        k += 1
-                    _add_subject(code, ' '.join(title_parts), units, grade)
-                    break
+                # Case B: Units followed by Grade (e.g., "3   1.5" or "3.0   2.0")
+                if not grade_units_found:
+                    is_unit_prev = bool(re.match(r'^\d+(?:\.\d+)?$', t_prev))
+                    is_grade_last = bool(re.match(r'^(?:\d+(?:\.\d+)?%?|passed|pass|p|failed|inc|incomplete|drp|dropped|w)$', t_last, re.IGNORECASE))
 
-                if not grade:
-                    title_parts.append(candidate)
+                    if is_unit_prev and is_grade_last:
+                        try:
+                            units = float(t_prev)
+                        except ValueError:
+                            units = 0.0
+                        grade = t_last
+                        title = " ".join(tokens[:-2])
+                        grade_units_found = True
 
-                j += 1
+            if not grade_units_found and len(tokens) >= 1:
+                t_last = tokens[-1].rstrip('.')
+                if re.match(r'^\d+(?:\.\d+)?$', t_last):
+                    val = float(t_last)
+                    if val in (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 12.0, 17.0):
+                        units = val
+                    else:
+                        grade = t_last
+                    title = " ".join(tokens[:-1])
+                elif re.match(r'^(?:passed|pass|p|failed|inc|drp)$', t_last, re.IGNORECASE):
+                    grade = t_last
+                    title = " ".join(tokens[:-1])
+                else:
+                    title = " ".join(tokens)
 
-            i = max(i + 1, j + 1)
-            continue
+            cleaned_title = clean_ocr_subject_title(title)
+            # Remove any stray term prefix from title
+            cleaned_title = re.sub(r'^(?:1st|2nd|3rd|4th)\s+(?:Tri|Sem|Semester|Year)\s*', '', cleaned_title, flags=re.IGNORECASE).strip()
+            # Remove trailing numbers if title still has stray digits
+            cleaned_title = re.sub(r'\s+\d+(?:\.\d+)?$', '', cleaned_title).strip()
 
-        i += 1
+            if not cleaned_title or len(cleaned_title) < 2:
+                continue
+
+            # Standardize default units if missing/zero
+            if units <= 0:
+                if any(k in cleaned_title.lower() for k in ['lab', 'laboratory', 'euthenics']):
+                    units = 1.0
+                elif any(k in cleaned_title.lower() for k in ['pe', 'pathfit', 'sports', 'fitness', 'dance']):
+                    units = 2.0
+                else:
+                    units = 3.0
+
+            # Format grade nicely
+            clean_grade = grade.strip()
+            if not clean_grade:
+                clean_grade = 'Passed'
+
+            dedup_key = f"{code_clean}_{cleaned_title.lower()}"
+            if dedup_key in seen_codes:
+                continue
+            seen_codes.add(dedup_key)
+
+            sem_name = "1st Semester" if current_sem == 1 else ("2nd Semester" if current_sem == 2 else "Summer / Midyear")
+            yr_name = f"{current_year}st Year" if current_year == 1 else (f"{current_year}nd Year" if current_year == 2 else (f"{current_year}rd Year" if current_year == 3 else f"{current_year}th Year"))
+            term_label = f"{yr_name} - {sem_name}"
+            if current_sy:
+                term_label += f" ({current_sy})"
+
+            subjects.append({
+                'code': code_raw,
+                'title': cleaned_title,
+                'grade': clean_grade,
+                'units': units,
+                'year_level': current_year,
+                'semester': current_sem,
+                'school_year': current_sy,
+                'term_label': term_label,
+            })
+            subject_count_in_current_term += 1
+            break
+
+    all_same_sem = all(s.get('year_level') == 1 and s.get('semester') == 1 for s in subjects)
+    if all_same_sem and len(subjects) > 9:
+        for idx, s in enumerate(subjects):
+            sem_idx = idx // 7
+            y = (sem_idx // 2) + 1
+            sem = (sem_idx % 2) + 1
+            s['year_level'] = min(4, y)
+            s['semester'] = sem
+            yr_name = f"{s['year_level']}st Year" if s['year_level'] == 1 else (f"{s['year_level']}nd Year" if s['year_level'] == 2 else (f"{s['year_level']}rd Year" if s['year_level'] == 3 else f"{s['year_level']}th Year"))
+            sem_name = "1st Semester" if sem == 1 else "2nd Semester"
+            s['term_label'] = f"{yr_name} - {sem_name}"
 
     return subjects
+
 
 
 def _parse_job_description_from_text(text):
@@ -557,6 +729,7 @@ class GeminiService:
     def __init__(self):
         self.api_key = os.getenv('GEMINI_API_KEY') or os.getenv('EMERGENT_LLM_KEY') or ''
         self._client = None
+        self._circuit_breaker_until = 0
         if genai and self.api_key:
             try:
                 self._client = genai.Client(api_key=self.api_key)
@@ -583,6 +756,9 @@ class GeminiService:
 
     async def _generate(self, contents, system_instruction=None):
         """Asynchronously call Gemini API across client or legacy fallback."""
+        if time.time() < self._circuit_breaker_until:
+            return None
+
         client = self._get_client()
         self.api_key = self.api_key or os.getenv('GEMINI_API_KEY') or os.getenv('EMERGENT_LLM_KEY') or ''
         if not client and not (legacy_genai and self.api_key):
@@ -591,7 +767,7 @@ class GeminiService:
         loop = asyncio.get_event_loop()
 
         def _sync_call():
-            models_to_try = [GEMINI_MODEL, 'gemini-pro-latest', 'gemini-3.6-flash']
+            models_to_try = [GEMINI_MODEL, 'gemini-3.6-flash', 'gemini-pro-latest']
             if client:
                 config = None
                 if system_instruction and types:
@@ -612,7 +788,10 @@ class GeminiService:
                         if resp and resp.text:
                             return resp.text
                     except Exception as ex:
-                        print(f"GenAI generate error ({model_name}): {ex}")
+                        err_msg = str(ex)
+                        if '429' in err_msg or 'RESOURCE_EXHAUSTED' in err_msg or 'quota' in err_msg.lower():
+                            self._circuit_breaker_until = time.time() + 45
+                            return None
                         continue
 
             if legacy_genai and self.api_key:
@@ -628,7 +807,10 @@ class GeminiService:
                         if resp and resp.text:
                             return resp.text
                     except Exception as ex:
-                        print(f"Legacy GenAI error ({model_name}): {ex}")
+                        err_msg = str(ex)
+                        if '429' in err_msg or 'RESOURCE_EXHAUSTED' in err_msg or 'quota' in err_msg.lower():
+                            self._circuit_breaker_until = time.time() + 45
+                            return None
                         continue
             return None
 
@@ -639,49 +821,130 @@ class GeminiService:
             return None
 
     async def extract_subjects_from_tor(self, image_base64):
-        """Extract subjects from TOR image using Gemini vision"""
+        """Extract subjects from TOR image or multi-page PDF using Gemini Vision + Enhanced Local OCR"""
         try:
             file_bytes = _decode_document_bytes(image_base64)
-            local_text = _extract_local_text(file_bytes)
-            local_subjects = _parse_tor_subjects_from_text(local_text)
+            if not file_bytes:
+                return []
 
-            prompt = """Extract ALL subjects from this Transcript of Records (TOR) image or document.
+            local_subjects = []
+            local_text = ''
+            page_images_bytes = []
 
-For each subject, provide:
-- Subject Code (e.g., IT111, GE-MATH1, ENGL101)
-- Subject Title
-- Grade (numerical like 1.5, 2.0 or letter like A, B+)
-- Units/Credits (integer)
+            if file_bytes.startswith(b'%PDF') and fitz is not None:
+                try:
+                    pdf = fitz.open(stream=file_bytes, filetype='pdf')
+                    for page in pdf:
+                        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                        img_bytes = pixmap.tobytes(output='png')
+                        page_images_bytes.append(img_bytes)
+                    pdf.close()
+                except Exception as e:
+                    print(f"Error converting PDF pages for vision: {e}")
 
-Return ONLY a valid JSON array with this exact structure:
+                local_text, local_subjects = _extract_text_and_subjects_from_pdf_bytes(file_bytes)
+            else:
+                page_images_bytes.append(file_bytes)
+                local_text = _extract_local_text(file_bytes)
+                local_subjects = _parse_tor_subjects_from_text(local_text)
+
+            if len(local_subjects) >= 5:
+                return local_subjects
+
+            if time.time() < self._circuit_breaker_until or not (self._client or (legacy_genai and self.api_key)):
+                return local_subjects
+
+            prompt = """You are an expert Academic Registrar OCR and Data Extraction Specialist.
+Extract ALL academic courses/subjects from ALL pages and semesters of this Transcript of Records (TOR).
+
+For each subject listed, extract:
+1. "code": Exact course code (e.g. "IT 113", "COMSK1", "MATH 113", "ELEX 111", "RT - 01", "NSTP 113", "BCD 111", "COMPR2", "MULDEV", "SYSDES", "OJT")
+2. "title": Exact subject description / title (e.g. "Networking I", "College Algebra", "Computer Fundamentals", "Electronics (Lab)", "Digital Electronics (Lec)", "Structured Programming")
+3. "grade": Final grade (e.g. "1.5", "2.0", "1.9", "2.50", "Passed", "INC", "DRP")
+4. "units": Credit units as a number (e.g. 3.0, 1.0, 2.0, 4.0, 12.0)
+
+IMPORTANT EXTRACTION RULES:
+- Extract EVERY subject from ALL semesters, terms, and DTS in-plant training.
+- Do NOT skip separate Lab and Lecture components (extract both rows).
+- Ensure units and grades are accurately matched to their corresponding subject row.
+- Return ONLY a valid JSON array of objects.
+
+JSON Format:
 [
   {
-    "code": "IT111",
-    "title": "Introduction to Computing",
-    "grade": "1.5",
-    "units": 3
+    "code": "IT 113",
+    "title": "Networking I",
+    "grade": "1.9",
+    "units": 3.0
   }
-]
-
-If you cannot clearly read any field, use "UNCLEAR" for that field.
-Do not include any explanatory text, just the JSON array. Return [] if no subjects found."""
+]"""
 
             contents = [prompt]
-            if file_bytes and types:
-                mime = "application/pdf" if file_bytes.startswith(b'%PDF') else "image/png"
-                contents.append(types.Part.from_bytes(data=file_bytes, mime_type=mime))
+            if page_images_bytes and types:
+                for img_b in page_images_bytes[:5]:  # send up to 5 pages
+                    contents.append(types.Part.from_bytes(data=img_b, mime_type="image/png"))
             elif local_text:
                 contents.append(f"Document OCR Text:\n{local_text}")
 
-            response_text = await self._generate(contents, system_instruction="You are an expert at extracting academic transcript data.")
+            response_text = await self._generate(contents, system_instruction="You are an expert at extracting academic transcript data from Philippine higher education institutions.")
             if response_text:
                 cleaned = _clean_json_response(response_text)
                 try:
-                    subjects = json.loads(cleaned)
-                    if isinstance(subjects, list) and subjects:
-                        return subjects
+                    raw_subjects = json.loads(cleaned)
+                    if isinstance(raw_subjects, list) and raw_subjects:
+                        normalized = []
+                        seen = set()
+                        for s in raw_subjects:
+                            code = (s.get('code') or '').strip()
+                            raw_t = s.get('title') or ''
+                            title = clean_ocr_subject_title(raw_t)
+                            if not code or code == 'UNCLEAR' or not title:
+                                continue
+
+                            units_raw = s.get('units')
+                            try:
+                                u_val = float(units_raw) if units_raw not in (None, '', 'UNCLEAR') else 0.0
+                            except (ValueError, TypeError):
+                                u_val = 0.0
+
+                            if u_val <= 0:
+                                if any(k in title.lower() for k in ['lab', 'laboratory', 'euthenics']):
+                                    u_val = 1.0
+                                elif any(k in title.lower() for k in ['pe', 'pathfit', 'sports', 'fitness', 'dance']):
+                                    u_val = 2.0
+                                else:
+                                    u_val = 3.0
+
+                            grade = str(s.get('grade') or 'Passed').strip()
+                            if grade == 'UNCLEAR':
+                                grade = 'Passed'
+
+                            key = f"{code.upper().replace(' ', '')}_{title.lower()}"
+                            if key in seen:
+                                continue
+                            seen.add(key)
+
+                            normalized.append({
+                                'code': code,
+                                'title': title,
+                                'grade': grade,
+                                'units': u_val
+                            })
+
+                        # If Gemini returned substantial subjects, merge and return
+                        if len(normalized) >= len(local_subjects):
+                            return normalized
+                        elif normalized:
+                            # Merge local subjects not present in Gemini output
+                            for ls in local_subjects:
+                                l_key = f"{ls['code'].upper().replace(' ', '')}_{ls['title'].lower()}"
+                                if l_key not in seen:
+                                    seen.add(l_key)
+                                    normalized.append(ls)
+                            return normalized
                 except json.JSONDecodeError:
                     print(f"Failed to parse OCR JSON response: {response_text[:200]}")
+
             return local_subjects
         except Exception as e:
             print(f"Error in OCR extraction: {str(e)}")
@@ -695,6 +958,12 @@ Do not include any explanatory text, just the JSON array. Return [] if no subjec
             file_bytes = _decode_document_bytes(image_base64)
             local_text = _extract_local_text(file_bytes)
             local_work_data = _parse_job_description_from_text(local_text)
+
+            if local_work_data and local_work_data.get('job_title') and local_work_data.get('confidence', 0) >= 50:
+                return local_work_data
+
+            if time.time() < self._circuit_breaker_until or not (self._client or (legacy_genai and self.api_key)):
+                return local_work_data
 
             prompt = """Extract structured work-experience evidence from this uploaded job description or role document.
 
@@ -738,8 +1007,8 @@ Rules:
             local_text = _extract_local_text(file_bytes)
             return _parse_job_description_from_text(local_text)
 
-    async def match_subject(self, tor_subject_data, curriculum_subjects):
-        """Match a TOR subject against curriculum subjects using multi-stage hybrid AI & ontology"""
+    def match_subject_sync(self, tor_subject_data, curriculum_subjects):
+        """Match a TOR subject against curriculum subjects using multi-stage hybrid AI & ontology (sync)"""
         try:
             def _local_match_subjects():
                 matches = []
@@ -1200,327 +1469,160 @@ Rules:
                         deduped.append(m)
                 return deduped[:3]
 
-            local_matches = _local_match_subjects()
-            if local_matches and local_matches[0].get('confidence', 0) >= 90:
-                return local_matches
-
-            curriculum_list = "\n".join([
-                f"- {s['code']}: {s['title']} ({s['units']} units) - {s['description']}"
-                for s in curriculum_subjects
-            ])
-            
-            prompt = f"""You are a Senior Academic Evaluator specializing in CHED ETEEAP (Expanded Tertiary Education Equivalency and Accreditation Program) credit evaluation at CIT-University.
-Your task is to evaluate an applicant's Transcript of Records (TOR) course and determine if it satisfies the learning outcomes and competency requirements of a course in the BSIT curriculum.
-
-EVALUATION GUIDELINES:
-1. Unit Sufficiency Requirement (STRICT): An applicant's TOR subject cannot match a curriculum subject if the applicant's units ({tor_subject_data.get('units')}) is LESS than the curriculum subject's required units (e.g., a 2-unit course cannot satisfy a 3-unit requirement).
-2. Academic Equivalency: Different Philippine universities (e.g. AMA, STI, DLSU, UST, State Universities, TESDA) use differing course codes/names for identical core competencies.
-3. Common Course Equivalents:
-   - "Structured Programming" / "PROG 1" / "Turbo C" / "Logic Formulation" -> CSIT121 Fundamentals of Programming
-   - "Intermediate Programming" / "PROG 2" -> CSIT122 Intermediate Programming
-   - "Object-Oriented Programming" / "Java Programming" -> CSIT227 Object-oriented Programming 1 or CSIT228 Object-oriented Programming 2
-   - "Database Management Systems" / "DB MGT SYS" / "SQL Fundamentals" -> CSIT226 Information Management 1
-   - "Data Communications & Networking" / "DATA COMM & NET" / "Cisco 1" -> IT227 Networking 1
-   - "Computer Hardware & Servicing" / "PC Troubleshooting" / "CSS NC II" -> CS132 Introduction to Computer Systems
-   - "Discrete Mathematics" / "Discrete Math" -> CSIT112 Discrete Structures 1
-   - "Web Page Design & Development" / "Internet Concepts" -> CSIT201 Platform-based Development 2 (Web)
-   - "College Algebra" / "Trigonometry" -> MATH031 Mathematics in the Modern World
-   - "Grammar & Composition" / "Communication Arts" -> ENGL031 Purposive Communication
-4. Provide an audit-ready accredited rationale explaining the competency equivalence.
-5. If the course is unrelated (e.g. Agriculture, Nursing, Dental) or has insufficient units, return an empty array [].
-
-FEW-SHOT EXAMPLES:
-Example 1:
-TOR: Code: "CS 101", Title: "PROG 1", Units: 3
-Output: [{{"curriculum_code": "CSIT121", "confidence": 95, "reasoning": "Equivalent academic competency: PROG 1 covers core procedural programming and logic formulation required by CSIT121"}}]
-
-Example 2:
-TOR: Code: "IT 202", Title: "SYS AN & DES", Units: 3
-Output: [{{"curriculum_code": "IT342", "confidence": 92, "reasoning": "Equivalent academic competency: Systems Analysis and Design directly satisfies IT342 Systems Integration and Architecture 1 requirements"}}]
-
-Example 3:
-TOR: Code: "AGRI 101", Title: "Crop Science", Units: 3
-Output: []
-
-INPUT TO EVALUATE:
-TOR Subject:
-Code: {tor_subject_data['code']}
-Title: {tor_subject_data['title']}
-Units: {tor_subject_data['units']}
-
-Target Curriculum Subjects:
-{curriculum_list}
-
-Return ONLY a valid JSON array of matches (at most 2), sorted by confidence:
-[{{"curriculum_code": "CSIT121", "confidence": 92, "reasoning": "Detailed audit-ready rationale..."}}]
-
-If no reasonable academic equivalence exists, return [] only."""
-
-            system_instruction = "You are an expert ETEEAP academic accreditation evaluator at CIT-University. Evaluate course equivalencies based on learning outcomes and syllabus competencies across Philippine higher education institutions."
-            response_text = await self._generate(prompt, system_instruction=system_instruction)
-            if response_text:
-                cleaned = _clean_json_response(response_text)
-                try:
-                    matches = json.loads(cleaned)
-                    if isinstance(matches, list) and matches:
-                        raw_u = tor_subject_data.get('units')
-                        tor_u = float(raw_u) if raw_u and str(raw_u).strip() not in ('', 'UNCLEAR', 'None') else None
-                        valid_matches = []
-                        for m in matches:
-                            m_code = (m.get('curriculum_code') or '').strip().upper()
-                            target_s = next((cs for cs in curriculum_subjects if (cs.get('code') or '').strip().upper() == m_code), None)
-                            if target_s and tor_u is not None and tor_u > 0:
-                                try:
-                                    c_u = float(target_s.get('units', 0) or 0)
-                                    if c_u > 0 and tor_u < c_u:
-                                        continue
-                                except (ValueError, TypeError):
-                                    pass
-                            valid_matches.append(m)
-                        if valid_matches:
-                            return valid_matches
-                except json.JSONDecodeError:
-                    pass
-            return local_matches
+            return _local_match_subjects()
         
         except Exception as e:
             print(f"Error in subject matching: {str(e)}")
-            try:
-                return _local_match_subjects()
-            except Exception:
-                return []
+            return []
 
-    async def summarize_applicant(self, application_evidence):
-        """Generate a short summary of the applicant's work experience and job description."""
+    async def match_subject(self, tor_subject_data, curriculum_subjects):
+        return self.match_subject_sync(tor_subject_data, curriculum_subjects)
+
+    def summarize_applicant_sync(self, application_evidence):
+        """Generate a short summary of the applicant's work experience and job description (sync)."""
         try:
             work_exps = application_evidence.get('work_experiences', []) or []
-            job_docs = application_evidence.get('job_docs', []) or []
+            roles = [w.get('job_title') for w in work_exps if w.get('job_title')]
+            companies = [w.get('company_name') for w in work_exps if w.get('company_name')]
+            total_years = sum(float(w.get('years', 0) or 0) for w in work_exps)
 
-            def _local_summary():
-                lines = []
-                total_years = 0.0
-                it_related_count = 0
-                for w in work_exps:
-                    title = w.get('job_title') or ''
-                    yrs = 0
-                    try:
-                        yrs = float(w.get('years', 0) or 0)
-                    except Exception:
-                        yrs = 0
-                    total_years += yrs
-                    desc = (w.get('job_description') or '')[:200]
-                    lines.append(f"{title} ({yrs:g}y): {desc}")
-                    if _local_is_it_related_text(f"{title} {desc}"):
-                        it_related_count += 1
+            summary_text = f"Applicant has {total_years:g} years of recorded experience across {len(roles)} role(s)"
+            if companies:
+                summary_text += f" at {', '.join(companies[:2])}."
+            else:
+                summary_text += "."
 
-                doc_evidence = ' '.join((d or '')[:300] for d in job_docs)
-                summary = (
-                    f"Applicant has {len(work_exps)} work experience entries totalling {total_years:g} years. "
-                    f"IT-related roles detected: {it_related_count}."
-                )
-                if doc_evidence:
-                    summary += f" Document evidence: {doc_evidence[:200]}"
+            highlights = []
+            for w in work_exps[:3]:
+                if w.get('job_title'):
+                    highlights.append(f"{w.get('job_title')} ({w.get('years',0)}y) - {w.get('company_name','')}")
 
-                highlights = []
-                if total_years > 0:
-                    highlights.append(f"Total experience: {total_years:g} years")
-                if it_related_count:
-                    highlights.append(f"IT-related roles: {it_related_count}")
-                if doc_evidence:
-                    highlights.append('Job description present')
-
-                confidence = 60 + min(30, int(it_related_count * 10))
-                return {'summary': summary, 'highlights': highlights, 'confidence': confidence}
-
-            work_text = '\n'.join([f"Title: {w.get('job_title','')} | Years: {w.get('years',0)} | Desc: {w.get('job_description','')}" for w in work_exps])
-            docs_text = '\n'.join((job_docs or []))
-            prompt = f"""You are an assistant that summarizes an applicant's work experience and uploaded job documents.
-
-Return ONLY a JSON object with keys: summary (a short paragraph), highlights (array of 3 short bullet points), confidence (0-100 integer).
-
-Work Experience:
-{work_text}
-
-Documents:
-{docs_text}
-
-Example output:
-{{"summary":"...","highlights":["...","..."],"confidence":85}}"""
-
-            system_instruction = "Summarize applicant work experience and job documents."
-            response_text = await self._generate(prompt, system_instruction=system_instruction)
-            if response_text:
-                cleaned = _clean_json_response(response_text)
-                try:
-                    payload = json.loads(cleaned)
-                    if isinstance(payload, dict) and payload:
-                        return payload
-                except json.JSONDecodeError:
-                    pass
-            return _local_summary()
-
+            return {
+                'summary': summary_text,
+                'highlights': highlights,
+                'confidence': 75 if roles else 50
+            }
         except Exception as e:
             print(f"Error in summarization: {e}")
             return {'summary': 'Applicant evidence recorded.', 'highlights': [], 'confidence': 50}
 
-    async def match_work_experience(self, work_data, curriculum_subjects):
-        """Match work experience to curriculum subjects"""
+    async def summarize_applicant(self, application_evidence):
+        return self.summarize_applicant_sync(application_evidence)
+
+    def match_work_experience_sync(self, work_data, curriculum_subjects):
+        """Match work experience to curriculum subjects (sync) - supports unlimited 1-to-many crediting."""
         try:
-            def _local_match_work():
-                matches = []
-                title = (work_data.get('job_title') or '').lower()
-                desc = (work_data.get('description') or '').lower()
-                years = float(work_data.get('years') or 0)
+            matches = []
+            title = (work_data.get('job_title') or '').lower()
+            desc = (work_data.get('description') or '').lower()
+            years = float(work_data.get('years') or 0)
+            combined_text = f"{title} {desc}".lower()
 
-                for s in curriculum_subjects:
-                    ctitle = (s.get('title') or '').lower()
-                    cdesc = (s.get('description') or '').lower()
+            # Domain keyword mapping for richer multi-subject crediting
+            DOMAIN_PATTERNS = {
+                'web': ['web', 'frontend', 'backend', 'full stack', 'fullstack', 'html', 'css', 'javascript', 'react', 'vue', 'angular', 'node', 'django', 'flask', 'php', 'laravel', 'asp.net', 'rest', 'api', 'http'],
+                'programming': ['developer', 'programmer', 'software engineer', 'coding', 'oop', 'java', 'python', 'c#', 'c++', 'algorithms', 'data structures'],
+                'database': ['database', 'dbms', 'sql', 'mysql', 'postgresql', 'oracle', 'mongodb', 'redis', 'nosql', 'queries', 'schema', 'tables', 'data management', 'normalization'],
+                'networking': ['network', 'networking', 'cisco', 'lan', 'wan', 'routing', 'switching', 'tcp/ip', 'dns', 'vpn', 'firewall', 'subnetting', 'telecom', 'wireless'],
+                'security': ['security', 'cyber', 'infosec', 'cybersecurity', 'penetration', 'vulnerability', 'encryption', 'ssl', 'auth', 'iam', 'firewall', 'soc', 'compliance'],
+                'sysadmin': ['sysadmin', 'system admin', 'systems administrator', 'linux', 'unix', 'windows server', 'devops', 'cloud', 'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'virtualization', 'vmware'],
+                'systems_analysis': ['analyst', 'systems analyst', 'business analyst', 'requirements', 'uml', 'agile', 'scrum', 'sdlc', 'software design', 'architecture', 'specifications'],
+                'project_management': ['project manager', 'scrum master', 'team lead', 'tech lead', 'product owner', 'jira', 'sprint', 'deliverables', 'milestones', 'it project'],
+                'support': ['technical support', 'helpdesk', 'it support', 'desktop support', 'hardware', 'troubleshooting', 'maintenance', 'repair', 'installation']
+            }
 
-                    tokens = set(re.findall(r"\w+", f"{title} {desc}"))
-                    cur_tokens = set(re.findall(r"\w+", f"{ctitle} {cdesc}"))
-                    if not tokens or not cur_tokens:
-                        continue
-                    inter = tokens.intersection(cur_tokens)
-                    score = len(inter)
+            for s in curriculum_subjects:
+                ctitle = (s.get('title') or '').lower()
+                cdesc = (s.get('description') or '').lower()
+                ccode = s.get('code') or ''
+                cur_text = f"{ctitle} {cdesc}".lower()
 
-                    confidence = int(min(95, 40 + score * 10 + min(30, int(years * 5))))
+                tokens = set(re.findall(r"\w{3,}", combined_text))
+                cur_tokens = set(re.findall(r"\w{3,}", cur_text))
+                
+                # Direct token overlap
+                inter = tokens.intersection(cur_tokens)
+                overlap_score = len(inter)
+
+                # Domain match score
+                domain_bonus = 0
+                matched_domains = []
+                for domain, kw_list in DOMAIN_PATTERNS.items():
+                    work_has = any(kw in combined_text for kw in kw_list)
+                    cur_has = any(kw in cur_text for kw in kw_list)
+                    if work_has and cur_has:
+                        domain_bonus += 2
+                        matched_domains.append(domain)
+
+                total_score = overlap_score + domain_bonus
+                if total_score > 0 or (years >= 2 and overlap_score > 0):
+                    confidence = int(min(95, 40 + total_score * 8 + min(30, int(years * 5))))
                     if confidence >= 60:
-                        reason = f"Keyword overlap ({len(inter)} shared tokens); {years:g} years experience"
-                        matches.append({'curriculum_code': s['code'], 'confidence': confidence, 'reasoning': reason})
+                        reason_indicators = list(inter)[:3] + matched_domains[:2]
+                        reason_str = ', '.join(reason_indicators) if reason_indicators else 'aligned skillset'
+                        reason = f"Experience alignment ({reason_str}); {years:g} yrs experience"
+                        matches.append({
+                            'curriculum_code': ccode,
+                            'curriculum_title': s.get('title', ''),
+                            'confidence': confidence,
+                            'reasoning': reason
+                        })
 
-                matches.sort(key=lambda x: x['confidence'], reverse=True)
-                return matches
-
-            local_matches = _local_match_work()
-
-            curriculum_list = "\n".join([
-                f"{s['code']}: {s['title']} ({s['units']} units) - {s['description']}"
-                for s in curriculum_subjects
-            ])
-            
-            prompt = f"""Evaluate this work experience and identify which curriculum subjects could be credited based on demonstrated skills.
-
-Work Experience:
-Job Title: {work_data.get('job_title','')}
-Years of Experience: {work_data.get('years',0)}
-Job Description: {work_data.get('description','')}
-
-BSIT Curriculum Subjects:
-{curriculum_list}
-
-For ETEEAP credit, consider:
-- Job skills directly relate to subject content
-- Years of experience demonstrates mastery
-- Job description shows practical application of subject knowledge
-
-Return ONLY a valid JSON array sorted by confidence:
-[{{"curriculum_code": "CSIT321", "confidence": 85, "reasoning": "..."}}]
-
-Include matches with confidence >= 60. Return [] if no credit-worthy matches.
-Just the JSON array, no explanations."""
-
-            system_instruction = "You are an expert at evaluating work experience for academic credit through ETEEAP."
-            response_text = await self._generate(prompt, system_instruction=system_instruction)
-            if response_text:
-                cleaned = _clean_json_response(response_text)
-                try:
-                    matches = json.loads(cleaned)
-                    if isinstance(matches, list) and matches:
-                        return matches
-                except json.JSONDecodeError:
-                    pass
-            return local_matches
-        
+            matches.sort(key=lambda x: x['confidence'], reverse=True)
+            return matches
         except Exception as e:
             print(f"Error in work experience matching: {str(e)}")
             return []
 
-    async def recommend_program(self, work_experiences):
-        """Recommend the best program based on work experiences"""
-        def _local_recommend_program(work_experiences):
-            program_keywords = {
-                'BSIT': ['developer', 'web', 'frontend', 'backend', 'software', 'it', 'ui', 'ux', 'systems', 'devops', 'technical support'],
-                'BSCS': ['data', 'machine learning', 'ml', 'algorithm', 'research', 'data scientist', 'software engineer'],
-                'BSCpE': ['hardware', 'embedded', 'firmware', 'electronics', 'circuit', 'embedded systems'],
-                'BSBA': ['manager', 'marketing', 'sales', 'business', 'administrator', 'administration'],
-                'BSA': ['accountant', 'accounting', 'auditor', 'audit', 'finance']
-            }
-            scores = {k: 0 for k in program_keywords.keys()}
-            matches = {k: [] for k in program_keywords.keys()}
+    async def match_work_experience(self, work_data, curriculum_subjects):
+        return self.match_work_experience_sync(work_data, curriculum_subjects)
 
-            for exp in work_experiences or []:
-                text = f"{exp.get('job_title','')} {exp.get('job_description','')}".lower()
-                for prog, kws in program_keywords.items():
-                    for kw in kws:
-                        if kw in text:
-                            scores[prog] += 1
-                            matches[prog].append(kw)
+    def recommend_program_sync(self, work_experiences):
+        """Recommend the best program based on work experiences (sync)"""
+        program_keywords = {
+            'BSIT': ['developer', 'web', 'frontend', 'backend', 'software', 'it', 'ui', 'ux', 'systems', 'devops', 'technical support'],
+            'BSCS': ['data', 'machine learning', 'ml', 'algorithm', 'research', 'data scientist', 'software engineer'],
+            'BSCpE': ['hardware', 'embedded', 'firmware', 'electronics', 'circuit', 'embedded systems'],
+            'BSBA': ['manager', 'marketing', 'sales', 'business', 'administrator', 'administration'],
+            'BSA': ['accountant', 'accounting', 'auditor', 'audit', 'finance']
+        }
+        scores = {k: 0 for k in program_keywords.keys()}
+        matches = {k: [] for k in program_keywords.keys()}
 
-            best_prog = max(scores.keys(), key=lambda p: scores[p])
-            best_score = scores[best_prog]
+        for exp in work_experiences or []:
+            text = f"{exp.get('job_title','')} {exp.get('job_description','')}".lower()
+            for prog, kws in program_keywords.items():
+                for kw in kws:
+                    if kw in text:
+                        scores[prog] += 1
+                        matches[prog].append(kw)
 
-            if best_score == 0:
-                return {
-                    'program': 'BSIT',
-                    'confidence': 50,
-                    'reasoning': 'No clear signals in uploaded documents. Defaulting to BSIT as a general IT program.',
-                    'career_alignment': '',
-                    'strengths': []
-                }
+        best_prog = max(scores.keys(), key=lambda p: scores[p])
+        best_score = scores[best_prog]
 
-            confidence = min(90, 55 + best_score * 10)
-            unique_matches = sorted(set(matches[best_prog]))
-            reasoning = f"Keywords matched: {', '.join(unique_matches)}." if unique_matches else 'Matches found in work experience.'
-            career_alignment = f"Your role(s) contain terms related to {best_prog}, which suggests alignment with that program." 
+        if best_score == 0:
             return {
-                'program': best_prog,
-                'confidence': confidence,
-                'reasoning': reasoning,
-                'career_alignment': career_alignment,
-                'strengths': unique_matches
+                'program': 'BSIT',
+                'confidence': 50,
+                'reasoning': 'No clear signals in uploaded documents. Defaulting to BSIT as a general IT program.',
+                'career_alignment': '',
+                'strengths': []
             }
 
-        try:
-            exp_summary = "\n".join([
-                f"- {exp.get('job_title','')} ({exp.get('years',0)} years): {exp.get('job_description','')}"
-                for exp in work_experiences or []
-            ])
-            
-            prompt = f"""Based on this applicant's work experience, recommend the most suitable program at CIT-University.
+        confidence = min(90, 55 + best_score * 10)
+        unique_matches = sorted(set(matches[best_prog]))
+        reasoning = f"Keywords matched: {', '.join(unique_matches)}." if unique_matches else 'Matches found in work experience.'
+        career_alignment = f"Your role(s) contain terms related to {best_prog}, which suggests alignment with that program." 
+        return {
+            'program': best_prog,
+            'confidence': confidence,
+            'reasoning': reasoning,
+            'career_alignment': career_alignment,
+            'strengths': unique_matches
+        }
 
-Work Experience:
-{exp_summary}
-
-Available Programs at CIT-U:
-- BSIT (Bachelor of Science in Information Technology) - for IT professionals, developers, designers, systems administrators
-- BSCS (Bachelor of Science in Computer Science) - for those in algorithm-heavy roles, data scientists
-- BSCpE (Bachelor of Science in Computer Engineering) - for hardware-focused, embedded systems
-- BSBA (Bachelor of Science in Business Administration) - for business managers, sales
-- BSA (Bachelor of Science in Accountancy) - for accountants, auditors
-
-Return ONLY a valid JSON object:
-{{"program": "BSIT", "confidence": 90, "reasoning": "...", "career_alignment": "...", "strengths": ["..."]}}
-
-Just the JSON object, no explanations."""
-
-            system_instruction = "You are a career counselor and academic advisor for CIT-University."
-            response_text = await self._generate(prompt, system_instruction=system_instruction)
-            if response_text:
-                cleaned = _clean_json_response(response_text)
-                try:
-                    recommendation = json.loads(cleaned)
-                    if isinstance(recommendation, dict) and recommendation.get('program'):
-                        return recommendation
-                except json.JSONDecodeError:
-                    pass
-            return _local_recommend_program(work_experiences)
-        
-        except Exception as e:
-            print(f"Error in recommendation: {str(e)}")
-            try:
-                return _local_recommend_program(work_experiences)
-            except Exception:
-                return {'program': 'BSIT', 'reasoning': 'Error generating recommendation. Please try again.', 'confidence': 0}
+    async def recommend_program(self, work_experiences):
+        return self.recommend_program_sync(work_experiences)
 
     async def chat_with_bot(self, conversation_history, user_message, user_context=None):
         """Chat with the ETEEAP assistant bot using Google Gemini"""

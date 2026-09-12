@@ -149,7 +149,7 @@ class TORDocumentSerializer(serializers.ModelSerializer):
 class TORSubjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = TORSubject
-        fields = ['id', 'application', 'code', 'title', 'grade', 'units', 'raw_text']
+        fields = ['id', 'application', 'code', 'title', 'grade', 'units', 'year_level', 'semester', 'school_year', 'term_label', 'raw_text']
 
 class SubjectMatchSerializer(serializers.ModelSerializer):
     tor_subject = TORSubjectSerializer(read_only=True)
