@@ -186,8 +186,8 @@ export const ApplyPage = () => {
     const file = event.target.files[0];
     if (!file) return;
     
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error('File too large. Max 10MB.');
+    if (file.size > 50 * 1024 * 1024) {
+      toast.error('File too large. Max 50MB.');
       return;
     }
     
@@ -475,14 +475,10 @@ export const ApplyPage = () => {
     setSubmitting(true);
     try {
       await applicationApi.submit(id);
-      toast.success('Application submitted! AI is processing...');
+      toast.success('Application submitted successfully! The Department Chair will review and run AI evaluation.');
       
-      // Trigger AI processing
-      try {
-        await applicationApi.process(id);
-      } catch (e) {
-        console.log('Processing started in background');
-      }
+      // AI processing (subject matching) is NOT triggered here.
+      // It will be run by the Department Chair via the "Run AI Evaluation" button in the evaluator review page.
       
       navigate(`/applicant/evaluation/${id}`);
     } catch (err) {

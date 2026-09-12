@@ -645,7 +645,60 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
         match.evaluator_note = request.data.get('note', '')
         match.save()
         return Response(SubjectMatchSerializer(match).data)
-    
+
+    @action(detail=False, methods=['post'], url_path='disregard-tor-subject')
+    def disregard_tor_subject(self, request):
+        """
+        Disregard an unmatched TOR subject — creates a rejected SubjectMatch with
+        no curriculum_subject. This moves the TOR subject out of the Unmatched list
+        and into the Rejected Subjects summary on the Department Chair panel.
+        """
+        if request.user.role not in ['evaluator', 'admin']:
+            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+        application_id = request.data.get('application_id')
+        tor_subject_id = request.data.get('tor_subject_id')
+        note = request.data.get('note', 'Disregarded — not applicable to any BSIT curriculum subject')
+
+        if not application_id or not tor_subject_id:
+            return Response(
+                {'error': 'application_id and tor_subject_id are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            application = Application.objects.get(id=application_id)
+        except Application.DoesNotExist:
+            return Response({'error': 'Application not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            tor_subject = TORSubject.objects.get(id=tor_subject_id, application=application)
+        except TORSubject.DoesNotExist:
+            return Response({'error': 'TOR subject not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Remove any existing pending matches for this TOR subject
+        SubjectMatch.objects.filter(
+            application=application,
+            tor_subject=tor_subject,
+            status='pending'
+        ).delete()
+
+        # Create (or update) a rejected match with no curriculum subject
+        match, created = SubjectMatch.objects.update_or_create(
+            application=application,
+            tor_subject=tor_subject,
+            curriculum_subject=None,
+            defaults={
+                'source': 'tor',
+                'confidence': 0,
+                'status': 'rejected',
+                'evaluator_note': note,
+                'matching_reason': 'Disregarded by evaluator — not applicable to any BSIT curriculum subject'
+            }
+        )
+
+        return Response(SubjectMatchSerializer(match).data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
     def create(self, request, *args, **kwargs):
         if request.user.role not in ['evaluator', 'admin']:
             return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)

@@ -152,6 +152,44 @@ code {
     background: #5e1721;
 }
 
+/* Thin scrollbar for evaluation panel columns */
+.panel-scroll::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+}
+
+.panel-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.panel-scroll::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 10px;
+}
+
+.panel-scroll::-webkit-scrollbar-thumb:hover {
+    background: #7a1e2b;
+}
+
+/* Thin scrollbar for table scroll containers */
+.table-scroll::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+}
+
+.table-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.table-scroll::-webkit-scrollbar-thumb {
+    background: #e5e7eb;
+    border-radius: 10px;
+}
+
+.table-scroll::-webkit-scrollbar-thumb:hover {
+    background: #9ca3af;
+}
+
 /* Animation for chat widget */
 @keyframes slide-up {
     from {

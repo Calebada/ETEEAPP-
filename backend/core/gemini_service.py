@@ -10,7 +10,8 @@ from io import BytesIO
 from dotenv import load_dotenv
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageOps, ImageFilter
+import cv2
 
 try:
     import fitz
@@ -221,6 +222,8 @@ def clean_ocr_subject_title(title):
     if not title:
         return ''
     t = title.strip()
+    # Strip any trailing semester or term words that got attached to the title (e.g. 'First Semester.SY 2020-2021')
+    t = re.sub(r'\s*(?:First|Second|Third|Fourth|1st|2nd|3rd|4th)\s*(?:Sem|Semester|Term|Trimester|SY|A\.?Y\.?).*$', '', t, flags=re.IGNORECASE).strip()
     # Split concatenated words with conjunctions (e.g., 'GrammarandComposition' -> 'Grammar and Composition')
     t = re.sub(r'([a-zA-Z]{3,})(and|with|for|of)([A-Z][a-zA-Z]+)', r'\1 \2 \3', t)
     # Insert space between lowercase and uppercase letters (e.g., 'andServicing' -> 'and Servicing', 'ServiceTraining' -> 'Service Training')
@@ -266,8 +269,57 @@ def _get_local_ocr_engine():
         return None
 
 
+def _preprocess_tor_image(pil_or_cv_img, target_max_dim=2200):
+    """
+    Preprocess document image for OCR:
+    - Resize high-res scans / photos cleanly with LANCZOS to target_max_dim (prevents ONNX OOM)
+    - Contrast Limited Adaptive Histogram Equalization (CLAHE) on low-contrast / faint images
+    - Mild autocontrast for crisp documents to avoid watermark noise amplification
+    """
+    if pil_or_cv_img is None:
+        return None
+
+    if isinstance(pil_or_cv_img, np.ndarray):
+        img_pil = Image.fromarray(pil_or_cv_img)
+    elif isinstance(pil_or_cv_img, Image.Image):
+        img_pil = pil_or_cv_img
+    else:
+        return pil_or_cv_img
+
+    w, h = img_pil.size
+    max_dim = max(w, h)
+    if max_dim > target_max_dim:
+        scale = target_max_dim / float(max_dim)
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        img_pil = img_pil.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    try:
+        gray = np.array(img_pil.convert('L'))
+        std_dev = float(np.std(gray))
+
+        # If low contrast (faint ink, uneven phone shadows), apply CLAHE
+        if std_dev < 42:
+            img_cv = cv2.cvtColor(np.array(img_pil.convert('RGB')), cv2.COLOR_RGB2BGR)
+            lab = cv2.cvtColor(img_cv, cv2.COLOR_BGR2LAB)
+            l_channel, a_channel, b_channel = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8))
+            cl = clahe.apply(l_channel)
+            limg = cv2.merge((cl, a_channel, b_channel))
+            enhanced_bgr = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+            return cv2.cvtColor(enhanced_bgr, cv2.COLOR_BGR2RGB)
+        else:
+            return np.array(ImageOps.autocontrast(img_pil.convert('RGB'), cutoff=0.2))
+    except Exception:
+        return np.array(img_pil.convert('RGB'))
+
+
 def _reconstruct_page_lines_from_ocr(ocr_result, y_threshold=18):
-    """Spatially reconstruct horizontal tabular text lines from OCR bounding boxes."""
+    """
+    Spatially reconstruct horizontal tabular text lines from OCR bounding boxes.
+    Detects 2-column page layouts (common in Philippine University transcripts)
+    and sorts lines within each column independently to prevent horizontal cross-merging.
+    """
     if not ocr_result:
         return []
 
@@ -283,38 +335,69 @@ def _reconstruct_page_lines_from_ocr(ocr_result, y_threshold=18):
         try:
             y_center = (box[0][1] + box[2][1]) / 2.0
             x_left = box[0][0]
-            items.append({'text': text, 'y': y_center, 'x': x_left, 'conf': conf})
+            x_right = box[1][0]
+            box_width = x_right - x_left
+            items.append({
+                'text': text,
+                'y': y_center,
+                'x': x_left,
+                'x_right': x_right,
+                'width': box_width,
+                'conf': conf
+            })
         except (IndexError, TypeError):
             continue
 
     if not items:
         return []
 
-    # Sort by Y ascending
-    items.sort(key=lambda it: it['y'])
+    min_x = min(it['x'] for it in items)
+    max_x = max(it['x_right'] for it in items)
+    page_width = max_x - min_x
+    mid_x = min_x + (page_width / 2.0)
 
-    lines = []
-    current_line = []
-    current_y = None
+    left_items = [it for it in items if it['x'] < mid_x and it['x_right'] < (mid_x + page_width * 0.15)]
+    right_items = [it for it in items if it['x'] >= (mid_x - page_width * 0.15)]
 
-    for item in items:
-        if current_y is None:
-            current_y = item['y']
-            current_line.append(item)
-        elif abs(item['y'] - current_y) <= y_threshold:
-            current_line.append(item)
-            current_y = sum(it['y'] for it in current_line) / len(current_line)
-        else:
-            current_line.sort(key=lambda it: it['x'])
-            lines.append("   ".join(it['text'] for it in current_line))
-            current_line = [item]
-            current_y = item['y']
+    has_two_columns = False
+    if page_width > 500 and len(left_items) >= 6 and len(right_items) >= 6:
+        median_width = np.median([it['width'] for it in items]) if items else 0
+        if median_width < (page_width * 0.45):
+            has_two_columns = True
 
-    if current_line:
-        current_line.sort(key=lambda it: it['x'])
-        lines.append("   ".join(it['text'] for it in current_line))
+    def _cluster_column_items(col_items):
+        if not col_items:
+            return []
+        col_items.sort(key=lambda it: it['y'])
+        lines = []
+        current_line = []
+        current_y = None
 
-    return lines
+        for itm in col_items:
+            if current_y is None:
+                current_y = itm['y']
+                current_line.append(itm)
+            elif abs(itm['y'] - current_y) <= y_threshold:
+                current_line.append(itm)
+                current_y = sum(x['y'] for x in current_line) / len(current_line)
+            else:
+                current_line.sort(key=lambda x: x['x'])
+                lines.append("   ".join(x['text'] for x in current_line))
+                current_line = [itm]
+                current_y = itm['y']
+
+        if current_line:
+            current_line.sort(key=lambda x: x['x'])
+            lines.append("   ".join(x['text'] for x in current_line))
+
+        return lines
+
+    if has_two_columns:
+        left_lines = _cluster_column_items(left_items)
+        right_lines = _cluster_column_items(right_items)
+        return left_lines + right_lines
+    else:
+        return _cluster_column_items(items)
 
 
 def _ocr_image_bytes(file_bytes):
@@ -323,11 +406,9 @@ def _ocr_image_bytes(file_bytes):
         return ''
 
     try:
-        image = Image.open(BytesIO(file_bytes)).convert('RGB')
-        # Constrain dimensions to prevent ONNX memory overflow on huge scans
-        if image.width > 1600 or image.height > 1600:
-            image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
-        result = engine(np.array(image))
+        raw_image = Image.open(BytesIO(file_bytes)).convert('RGB')
+        preprocessed_img = _preprocess_tor_image(raw_image, target_max_dim=2200)
+        result = engine(preprocessed_img)
         if isinstance(result, tuple):
             result = result[0]
 
@@ -360,14 +441,15 @@ def _extract_text_and_subjects_from_pdf_bytes(file_bytes):
                     if cleaned_line:
                         all_lines.append(cleaned_line)
 
-            # Also render page with dynamic scale factor (up to 1600px) and run OCR for visual tables
+            # Also render page with dynamic scale factor (up to 2200px) and run OCR for visual tables
             if engine is not None:
                 try:
                     max_dim = max(page.rect.width, page.rect.height) if (page.rect.width and page.rect.height) else 800
-                    scale = min(2.0, max(1.0, 1600.0 / max_dim))
+                    scale = min(2.5, max(1.5, 2200.0 / max_dim))
                     pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
-                    image = Image.frombytes('RGB', [pixmap.width, pixmap.height], pixmap.samples)
-                    result = engine(np.array(image))
+                    page_img = Image.frombytes('RGB', [pixmap.width, pixmap.height], pixmap.samples)
+                    preprocessed_img = _preprocess_tor_image(page_img, target_max_dim=2200)
+                    result = engine(preprocessed_img)
                     if isinstance(result, tuple):
                         result = result[0]
 
@@ -398,12 +480,58 @@ def _extract_local_text(file_bytes):
     return _ocr_image_bytes(file_bytes)
 
 
+INVALID_CODE_PREFIXES = {
+    'NUMBER', 'PAGE', 'CITY', 'TEL', 'FAX', 'DATE', 'FORM', 'YEAR', 'TERM',
+    'CODE', 'UNIT', 'GRAD', 'NOTE', 'BATTAD', 'LEVEL', 'DIPLOMA', 'OFFICE',
+    'CAMPUS', 'COLLEGE', 'UNIV', 'CEBU', 'MANILA', 'QUEZON', 'DAVAO', 'TOTAL',
+    'STUDENT', 'ADDRESS', 'ACCREDITED', 'REMARKS', 'EVALUATOR', 'REGISTRAR',
+    'SEAL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER',
+    'DECEMBER', 'JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'PASSED', 'FAILED',
+    'NAME', 'TITLE', 'GRADE', 'CREDIT', 'DESCRIPTIVE', 'RATING', 'HOURS', 'LEC', 'LAB',
+    'BOX', 'NO', 'SECTION', 'ROOM', 'FLOOR', 'STREET', 'ROAD', 'AVE', 'AVENUE', 'BLVD',
+    'BARANGAY', 'BRGY', 'REGION', 'PROVINCE', 'MUNICIPALITY', 'PHILIPPINES',
+    'CAVITE', 'LAGUNA', 'BATANGAS', 'RIZAL', 'BULACAN', 'PAMPANGA', 'ILOILO',
+    'BACOLOD', 'BOHOL', 'LEYTE', 'SAMAR', 'TARLAC', 'PANGASINAN', 'BENGUET',
+    'BAGUIO', 'BICOL', 'ALBAY', 'PALAWAN', 'ZAMBOANGA', 'CAGAYAN', 'BUTUAN',
+    'GENSAN', 'ILIGAN', 'NUEVA', 'ECIJA', 'CABANATUAN', 'TARLAC', 'ISABELA',
+    'OF', 'FOR', 'AND', 'WITH', 'FROM', 'THE', 'COPY', 'SHEET', 'ISSUED',
+    'GOOD', 'FAIR', 'POOR', 'EXCELLENT', 'FAILURE', 'CONDITIONAL', 'INCOMPLETE', 'DROPPED', 'WITHDRAWN',
+    'TRANSFER', 'EQUIVALENT', 'SUMMER', 'SPECIAL', 'SCALE', 'SYSTEM', 'GENERAL', 'AVERAGE', 'GWA'
+}
+
+
+def is_valid_course_code(code_str):
+    """Validate that an extracted code string is a genuine course code, not document metadata or headers."""
+    if not code_str:
+        return False
+    clean = re.sub(r'[^A-Z0-9]', '', code_str.upper())
+    letters_only = re.sub(r'[^A-Z]', '', code_str.upper())
+    
+    if clean in INVALID_CODE_PREFIXES or letters_only in INVALID_CODE_PREFIXES:
+        return False
+    if clean.isdigit():
+        return False
+    if len(clean) < 2 or len(clean) > 12:
+        return False
+    
+    has_digit = any(c.isdigit() for c in clean)
+    known_mnemonics = {
+        'OJT', 'MULDEV', 'SYSDES', 'COMFUN', 'ALGBRA', 'INTPRO', 'SYMLOG',
+        'PUBSPK', 'PREVAL', 'BUSDEV', 'PROJMG', 'STCAB', 'TECWRT', 'WEBPD',
+        'ACCTGI', 'BAS'
+    }
+    if not has_digit and clean not in known_mnemonics:
+        return False
+    return True
+
+
 # Comprehensive regex for course codes across Philippine colleges (ACLC, CITE, CIT-U, STI, AMA, DLSU, etc.)
 COURSE_CODE_REGEX = re.compile(
     r'\b(?P<code>'
-    r'[A-Z]{2,6}\s*[-–—]?\s*\d{1,4}[A-Z]?'
+    r'[A-Z]{2,6}\s*[-–—.]?\s*\d{1,4}[A-Z]?'
     r'|[A-Z]{2,4}\s*&\s*[A-Z]{2,4}\s*\d{1,4}'
     r'|COMSK\d|COMFUN|ETHNS\d|NSTP\d{1,2}|PHYED\d|ALGBRA|INTPRO|SYMLOG|NET\d|COMPR\d|PUBSPK|PREVAL|BUSDEV|MULDEV|PROJMG|STCAB|TECWRT|WEBPD|SYSDES|ACCTGI|OJT|BAS|SEM\s*\d'
+    r'|RT\s*-\s*\d+|BCD\s*\d+|ELEX\s*\d+|CCNA\s*\d+|CSIT\s*\d+|MATH\s*\d+|ENG\s*\d+|FIL\s*\d+|SOCSCI\s*\d+|HUM\s*\d+|PE\s*\d+|PATHFIT\s*\d+|IT\s*\d+|CS\s*\d+|IS\s*\d+|ACT\s*\d+|BSIT\s*\d+|BSCS\s*\d+|ENGG\s*\d+'
     r')\b',
     re.IGNORECASE
 )
@@ -437,6 +565,11 @@ def _detect_term_header(line):
         'first year', 'second year', 'third year', 'fourth year'
     ]
     if not any(k in lower for k in term_keywords):
+        return None
+
+    # If the first word in the line is a valid course code, it is a subject row, not a header!
+    first_token = line.split()[0] if line.split() else ''
+    if is_valid_course_code(first_token):
         return None
 
     # Skip lines that are actually subject lines with units/grades or course descriptions
@@ -522,9 +655,11 @@ def _parse_tor_subjects_from_text(text):
 
         for code_match in code_matches:
             code_raw = code_match.group('code').strip()
-            code_clean = re.sub(r'\s+', '', code_raw.upper())
+            # Repair OCR confusion: e.g. 'CSlT' -> 'CSIT', 'lT' -> 'IT'
+            code_repaired = re.sub(r'\bCS[lI]T', 'CSIT', code_raw, flags=re.IGNORECASE)
+            code_repaired = re.sub(r'\b[lI]T\b', 'IT', code_repaired, flags=re.IGNORECASE)
 
-            if code_clean in {'PAGE', 'DATE', 'FORM', 'YEAR', 'TERM', 'CODE', 'UNIT', 'GRAD', 'NOTE', 'JUNE', 'MAY', 'APRIL', 'MARCH', 'SEAL'}:
+            if not is_valid_course_code(code_repaired):
                 continue
 
             post_code_text = line[code_match.end():].strip()
@@ -597,6 +732,12 @@ def _parse_tor_subjects_from_text(text):
             if not cleaned_title or len(cleaned_title) < 2:
                 continue
 
+            # Skip lines where title is OCR noise or artifact
+            if len(re.findall(r'[a-zA-Z]', cleaned_title)) < 4:
+                continue
+            if any(frag in cleaned_title.lower() for frag in ['--', '---', 'lr-i', 'tlrt', 'xx', '...']):
+                continue
+
             # Standardize default units if missing/zero
             if units <= 0:
                 if any(k in cleaned_title.lower() for k in ['lab', 'laboratory', 'euthenics']):
@@ -611,6 +752,7 @@ def _parse_tor_subjects_from_text(text):
             if not clean_grade:
                 clean_grade = 'Passed'
 
+            code_clean = re.sub(r'[^A-Z0-9]', '', code_repaired.upper())
             dedup_key = f"{code_clean}_{cleaned_title.lower()}"
             if dedup_key in seen_codes:
                 continue
@@ -623,7 +765,7 @@ def _parse_tor_subjects_from_text(text):
                 term_label += f" ({current_sy})"
 
             subjects.append({
-                'code': code_raw,
+                'code': code_repaired,
                 'title': cleaned_title,
                 'grade': clean_grade,
                 'units': units,
@@ -848,9 +990,6 @@ class GeminiService:
                 local_text = _extract_local_text(file_bytes)
                 local_subjects = _parse_tor_subjects_from_text(local_text)
 
-            if len(local_subjects) >= 5:
-                return local_subjects
-
             if time.time() < self._circuit_breaker_until or not (self._client or (legacy_genai and self.api_key)):
                 return local_subjects
 
@@ -919,10 +1058,10 @@ JSON Format:
                             if grade == 'UNCLEAR':
                                 grade = 'Passed'
 
-                            key = f"{code.upper().replace(' ', '')}_{title.lower()}"
-                            if key in seen:
+                            code_key = re.sub(r'[^A-Z0-9]', '', code.upper())
+                            if code_key in seen:
                                 continue
-                            seen.add(key)
+                            seen.add(code_key)
 
                             normalized.append({
                                 'code': code,
@@ -931,17 +1070,25 @@ JSON Format:
                                 'units': u_val
                             })
 
-                        # If Gemini returned substantial subjects, merge and return
-                        if len(normalized) >= len(local_subjects):
-                            return normalized
-                        elif normalized:
-                            # Merge local subjects not present in Gemini output
-                            for ls in local_subjects:
-                                l_key = f"{ls['code'].upper().replace(' ', '')}_{ls['title'].lower()}"
-                                if l_key not in seen:
-                                    seen.add(l_key)
-                                    normalized.append(ls)
-                            return normalized
+                        # Merge high-quality unique subjects from local OCR not already in vision output
+                        for ls in local_subjects:
+                            l_code_key = re.sub(r'[^A-Z0-9]', '', ls['code'].upper())
+                            if l_code_key in seen:
+                                continue
+                            
+                            l_title = ls.get('title', '').strip()
+                            # Filter out noisy OCR fragments
+                            if len(re.findall(r'[a-zA-Z]', l_title)) < 4:
+                                continue
+                            if any(frag in l_title.lower() for frag in ['--', '---', 'lr-i', 'tlrt', 'xx', '...']):
+                                continue
+                            if re.search(r'\b(?:19\d\d|20\d\d)\b', l_title):
+                                continue
+
+                            seen.add(l_code_key)
+                            normalized.append(ls)
+
+                        return normalized
                 except json.JSONDecodeError:
                     print(f"Failed to parse OCR JSON response: {response_text[:200]}")
 

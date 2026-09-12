@@ -80,6 +80,11 @@ export const EvaluatorReviewPage = () => {
 
   // Accordion state for Year/Semester dropdown groups
   const [expandedTerms, setExpandedTerms] = useState({});
+  // Disregard unmatched TOR subject
+  const [disregardDialogOpen, setDisregardDialogOpen] = useState(false);
+  const [disregardSubject, setDisregardSubject] = useState(null);
+  const [disregardReason, setDisregardReason] = useState('');
+  const [disregarding, setDisregarding] = useState(false);
 
   const downloadApprovedAsPDF = () => {
     try {
@@ -443,6 +448,33 @@ export const EvaluatorReviewPage = () => {
     }
   };
 
+  const handleDisregardUnmatched = (subject) => {
+    setDisregardSubject(subject);
+    setDisregardReason('');
+    setDisregardDialogOpen(true);
+  };
+
+  const submitDisregard = async () => {
+    if (!disregardSubject) return;
+    setDisregarding(true);
+    try {
+      await subjectMatchApi.disregardTorSubject(
+        id,
+        disregardSubject.id,
+        disregardReason.trim() || 'Disregarded — not applicable to any BSIT curriculum subject'
+      );
+      toast.success(`"${disregardSubject.code}" disregarded and moved to Rejected Subjects`);
+      setDisregardDialogOpen(false);
+      setDisregardSubject(null);
+      setDisregardReason('');
+      await loadData();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to disregard subject');
+    } finally {
+      setDisregarding(false);
+    }
+  };
+
   const handleRemoveMatch = async (matchId) => {
     const targetId = matchId || removeMatchId;
     if (!targetId) return;
@@ -748,10 +780,11 @@ export const EvaluatorReviewPage = () => {
     s => !approvedTorSubjectIds.has(s.id)
   );
 
-  // Matched TOR subject IDs (pending or approved)
+  // Matched TOR subject IDs (pending, approved, or rejected — rejected subjects
+  // should NOT reappear in the Unmatched list; they are shown in Rejected Subjects)
   const matchedTorIds = new Set(
     matches
-      .filter(m => m.tor_subject && m.curriculum_subject && m.status !== 'rejected')
+      .filter(m => m.tor_subject && (m.curriculum_subject || m.status === 'rejected'))
       .map(m => m.tor_subject.id)
   );
 
@@ -768,7 +801,8 @@ export const EvaluatorReviewPage = () => {
   const allMatchedItems = matches.filter(m => m.curriculum_subject);
 
   const approvedMatchesList = matches.filter(m => m.status === 'approved' && m.curriculum_subject);
-  const rejectedMatchesList = matches.filter(m => m.status === 'rejected' && m.curriculum_subject);
+  // Include all rejected matches (with or without a curriculum subject match)
+  const rejectedMatchesList = matches.filter(m => m.status === 'rejected');
   const pendingMatchesList = matches.filter(m => m.status === 'pending' && m.curriculum_subject);
   const pendingTorMatches = matches.filter(m => m.source === 'tor' && m.status === 'pending' && m.curriculum_subject);
   const pendingWorkMatches = matches.filter(m => m.source === 'work_experience' && m.status === 'pending' && m.curriculum_subject);
@@ -1167,7 +1201,10 @@ export const EvaluatorReviewPage = () => {
             {/* Side-by-Side Main Evaluation Workspace */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
               {/* LEFT COLUMN: Subject Matches & Unmatched Scanned Subjects */}
-              <div className="space-y-6">
+              <div
+                className="space-y-6 xl:sticky xl:top-6 panel-scroll"
+                style={{ maxHeight: 'calc(100vh - 140px)', overflowY: 'auto', overflowX: 'hidden', paddingRight: '4px' }}
+              >
                 <Card className="p-5 border-gray-200 bg-white shadow-2xs">
                   <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                     <h3 className="font-serif font-semibold text-lg flex items-center gap-2 text-gray-900">
@@ -1203,7 +1240,84 @@ export const EvaluatorReviewPage = () => {
                       )}
                     </div>
                   </div>
-                  
+
+                  {/* ── TOR Extraction Smart Summary ── */}
+                  {torSubjects && torSubjects.length > 0 && (() => {
+                    const totalExtracted   = torSubjects.length;
+                    const totalUnits       = torSubjects.reduce((s, t) => s + Number(t.units || 0), 0);
+                    const approvedCount    = approvedMatchesList.length;
+                    const approvedUnits    = approvedMatchesList.reduce((s, m) => s + Number(m.curriculum_subject?.units || 0), 0);
+                    const rejectedCount    = rejectedMatchesList.length;
+                    const pendingCount     = pendingMatchesList.length;
+                    const unmatchedCount   = unmatchedTorSubjects.length;
+                    const reviewedCount    = approvedCount + rejectedCount;
+                    const progressPct      = totalExtracted > 0 ? Math.round((reviewedCount / totalExtracted) * 100) : 0;
+
+                    return (
+                      <div className="mb-4 rounded-xl border border-blue-100 bg-gradient-to-br from-slate-50 to-blue-50/60 p-3.5 space-y-3">
+                        {/* Title row */}
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <Sparkles className="w-4 h-4 text-maroon" />
+                            <span className="text-xs font-semibold text-gray-800">TOR Extraction Summary</span>
+                          </div>
+                          <span className="text-[11px] text-gray-500 italic">
+                            {totalExtracted} subject{totalExtracted !== 1 ? 's' : ''} extracted · {totalUnits} total units scanned
+                          </span>
+                        </div>
+
+                        {/* Stat chips */}
+                        <div className="flex flex-wrap gap-2">
+                          <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 shadow-2xs">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                            <span className="text-[11px] font-semibold text-gray-700">{approvedCount}</span>
+                            <span className="text-[11px] text-gray-500">Approved</span>
+                            {approvedCount > 0 && (
+                              <span className="text-[10px] text-emerald-700 font-medium ml-0.5">({approvedUnits}u credited)</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 shadow-2xs">
+                            <div className="w-2 h-2 rounded-full bg-amber-400" />
+                            <span className="text-[11px] font-semibold text-gray-700">{pendingCount}</span>
+                            <span className="text-[11px] text-gray-500">Pending Review</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 shadow-2xs">
+                            <div className="w-2 h-2 rounded-full bg-orange-400" />
+                            <span className="text-[11px] font-semibold text-gray-700">{unmatchedCount}</span>
+                            <span className="text-[11px] text-gray-500">Unmatched</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 shadow-2xs">
+                            <div className="w-2 h-2 rounded-full bg-red-400" />
+                            <span className="text-[11px] font-semibold text-gray-700">{rejectedCount}</span>
+                            <span className="text-[11px] text-gray-500">Rejected</span>
+                          </div>
+                        </div>
+
+                        {/* Progress bar */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-gray-500 font-medium">Evaluation Progress</span>
+                            <span className="text-[10px] font-bold text-gray-700">{progressPct}% reviewed</span>
+                          </div>
+                          <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
+                            <div
+                              className="h-full rounded-full transition-all duration-500"
+                              style={{
+                                width: `${progressPct}%`,
+                                background: progressPct === 100
+                                  ? 'linear-gradient(90deg, #10b981, #059669)'
+                                  : 'linear-gradient(90deg, #7a1e2b, #d4a747)'
+                              }}
+                            />
+                          </div>
+                          <div className="text-[10px] text-gray-400 text-right">
+                            {reviewedCount} of {totalExtracted} subjects reviewed
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <Tabs defaultValue="all">
                     <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
                       <TabsList>
@@ -1543,6 +1657,7 @@ export const EvaluatorReviewPage = () => {
                   <UnmatchedApplicantSubjectsTable
                     unmatchedSubjects={unmatchedTorSubjects}
                     onBrowseSubject={(subj) => setBrowseModalTarget({ subject: subj })}
+                    onDisregard={!isFinalized ? handleDisregardUnmatched : null}
                     isFinalized={isFinalized}
                     onPreviewTor={openDocumentPreview}
                     documents={application?.documents || []}
@@ -1551,7 +1666,10 @@ export const EvaluatorReviewPage = () => {
               </div>
 
               {/* RIGHT COLUMN: Department Chair Decision (Summary of Approved & Rejected Subjects) */}
-              <div className="space-y-6 xl:sticky xl:top-6">
+              <div
+                className="space-y-6 xl:sticky xl:top-6 panel-scroll"
+                style={{ maxHeight: 'calc(100vh - 140px)', overflowY: 'auto', overflowX: 'hidden', paddingRight: '4px' }}
+              >
                 {!isFinalized && (
                   <Card className="p-5 border-gray-200 shadow-sm bg-white space-y-4">
                     <div className="flex items-center justify-between flex-wrap gap-2 pb-3 border-b border-gray-200">
@@ -1599,9 +1717,12 @@ export const EvaluatorReviewPage = () => {
                             No subjects approved yet. Review matched subjects on the left and click "Approve" to record accreditation.
                           </div>
                         ) : (
-                          <div className="overflow-x-auto border border-blue-200 rounded-lg bg-white shadow-2xs">
+                          <div
+                            className="overflow-x-auto border border-blue-200 rounded-lg bg-white shadow-2xs table-scroll"
+                            style={{ maxHeight: '260px', overflowY: 'auto' }}
+                          >
                             <table className="w-full text-xs">
-                              <thead className="bg-blue-100/80 border-b border-blue-200 text-blue-950 font-semibold uppercase tracking-wider text-[11px]">
+                              <thead className="bg-blue-100/80 border-b border-blue-200 text-blue-950 font-semibold uppercase tracking-wider text-[11px] sticky top-0 z-10">
                                 <tr>
                                   <th className="text-left py-2.5 px-3 w-[26%]">BSIT Subject</th>
                                   <th className="text-left py-2.5 px-3 w-[40%]">Applicant Evidence</th>
@@ -1694,11 +1815,14 @@ export const EvaluatorReviewPage = () => {
                             </span>
                           </div>
 
-                          <div className="overflow-x-auto border border-red-200 rounded-lg bg-white shadow-2xs">
+                          <div
+                            className="overflow-x-auto border border-red-200 rounded-lg bg-white shadow-2xs table-scroll"
+                            style={{ maxHeight: '260px', overflowY: 'auto' }}
+                          >
                             <table className="w-full text-xs">
-                              <thead className="bg-red-100/80 border-b border-red-200 text-red-950 font-semibold uppercase tracking-wider text-[11px]">
+                              <thead className="bg-red-100/80 border-b border-red-200 text-red-950 font-semibold uppercase tracking-wider text-[11px] sticky top-0 z-10">
                                 <tr>
-                                  <th className="text-left py-2.5 px-3 w-[30%]">BSIT Subject</th>
+                                  <th className="text-left py-2.5 px-3 w-[30%]">Applicant Subject</th>
                                   <th className="text-left py-2.5 px-3 w-[45%]">Reason</th>
                                   <th className="text-center py-2.5 px-2 w-[25%]">Action</th>
                                 </tr>
@@ -1707,8 +1831,26 @@ export const EvaluatorReviewPage = () => {
                                 {rejectedMatchesList.map((match) => (
                                   <tr key={match.id} className="hover:bg-red-50/40 transition-colors">
                                     <td className="py-2.5 px-3 align-top">
-                                      <div className="font-mono font-bold text-red-700 text-xs">{match.curriculum_subject?.code || 'N/A'}</div>
-                                      <div className="text-[11px] text-gray-800 font-medium leading-tight mt-0.5">{match.curriculum_subject?.title || 'N/A'}</div>
+                                      {match.tor_subject ? (
+                                        <>
+                                          {/* Primary: Applicant's scanned TOR subject — bold maroon */}
+                                          <div className="font-mono font-bold text-[#7a1e2b] text-xs">{match.tor_subject.code}</div>
+                                          <div className="text-[11px] text-gray-800 font-medium leading-tight mt-0.5">{match.tor_subject.title}</div>
+                                          {/* Secondary: which BSIT subject it was matched to */}
+                                          {match.curriculum_subject && (
+                                            <div className="mt-1 text-[10px] text-gray-400 italic">
+                                              → attempted: {match.curriculum_subject.code} — {match.curriculum_subject.title}
+                                            </div>
+                                          )}
+                                        </>
+                                      ) : match.curriculum_subject ? (
+                                        <>
+                                          <div className="font-mono font-bold text-[#7a1e2b] text-xs">{match.curriculum_subject.code}</div>
+                                          <div className="text-[11px] text-gray-800 font-medium leading-tight mt-0.5">{match.curriculum_subject.title}</div>
+                                        </>
+                                      ) : (
+                                        <div className="text-[11px] text-gray-400">N/A</div>
+                                      )}
                                     </td>
                                     <td className="py-2.5 px-3 align-top text-[11px] text-red-900 italic">
                                       {match.evaluator_note || 'Rejected by evaluator'}
@@ -2005,6 +2147,89 @@ export const EvaluatorReviewPage = () => {
               data-testid="submit-reject-reason"
             >
               {actioning ? 'Saving...' : 'Reject Subject'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Disregard Unmatched Subject Dialog */}
+      <Dialog
+        open={disregardDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDisregardDialogOpen(false);
+            setDisregardSubject(null);
+            setDisregardReason('');
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-800">
+              <XCircle className="w-5 h-5 text-red-600" />
+              Disregard Subject
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            {disregardSubject && (
+              <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                <div className="font-mono font-bold text-[#7a1e2b] text-sm">{disregardSubject.code}</div>
+                <div className="text-xs text-gray-700 mt-0.5">{disregardSubject.title}</div>
+                <div className="text-[11px] text-gray-500 mt-0.5">{disregardSubject.units || 0} units · {disregardSubject.term_label || ''}</div>
+              </div>
+            )}
+
+            <p className="text-xs text-gray-600">
+              This subject has no applicable BSIT curriculum equivalent. Disregarding will move it out of the Unmatched list and record it under
+              <strong> Rejected Subjects</strong>.
+            </p>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-gray-700">Quick Presets:</label>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  'Not applicable to any BSIT curriculum subject',
+                  'General education subject with no BSIT equivalent',
+                  'Religious / PE subject not credited in BSIT program',
+                  'Duplicate or remedial subject — not creditable',
+                ].map((preset, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    className="text-[11px] bg-red-50 hover:bg-red-100 text-red-800 border border-red-200 rounded px-2 py-1 transition-colors text-left"
+                    onClick={() => setDisregardReason(preset)}
+                  >
+                    + {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <Textarea
+              value={disregardReason}
+              onChange={(e) => setDisregardReason(e.target.value)}
+              placeholder="Optional: type a reason or select a preset above..."
+              className="min-h-[80px] text-xs"
+            />
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDisregardDialogOpen(false)}
+              disabled={disregarding}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={submitDisregard}
+              className="bg-red-700 hover:bg-red-800 text-white"
+              disabled={disregarding}
+            >
+              {disregarding ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Disregarding...</> : 'Disregard Subject'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2625,6 +2850,7 @@ const CurriculumMatchModal = ({
 const UnmatchedApplicantSubjectsTable = ({
   unmatchedSubjects = [],
   onBrowseSubject,
+  onDisregard,
   isFinalized,
   onPreviewTor,
   documents = [],
@@ -2644,7 +2870,8 @@ const UnmatchedApplicantSubjectsTable = ({
         </span>
       </div>
       <p className="text-xs text-amber-800 mb-4">
-        These applicant transcript subjects have no BSIT curriculum match yet. Click <strong>Browse & Match</strong> to browse courses by year and semester and credit them.
+        These applicant transcript subjects have no BSIT curriculum match yet. Click <strong>Browse &amp; Match</strong> to browse courses by year and semester and credit them.
+        {onDisregard && <span className="ml-1">Click <strong>Disregard</strong> to reject subjects that are not applicable to any BSIT subject.</span>}
       </p>
 
       <div className="overflow-x-auto border border-amber-200 rounded-lg bg-white shadow-2xs">
@@ -2653,7 +2880,7 @@ const UnmatchedApplicantSubjectsTable = ({
             <tr>
               <th className="py-2.5 px-3 w-10 text-center">#</th>
               <th className="py-2.5 px-3 min-w-[240px]">Applicant Scanned Subject</th>
-              <th className="py-2.5 px-3 w-48 text-right pr-4">Curriculum Action</th>
+              <th className="py-2.5 px-3 text-right pr-4">{onDisregard ? 'Actions' : 'Curriculum Action'}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-amber-100">
@@ -2705,15 +2932,29 @@ const UnmatchedApplicantSubjectsTable = ({
                   </td>
                   <td className="py-3 px-3 align-middle text-right pr-4">
                     {!isFinalized && (
-                      <Button
-                        size="sm"
-                        className="bg-maroon hover:bg-maroon-dark text-white h-7 text-xs px-3 font-medium inline-flex items-center gap-1.5 shadow-2xs transition-colors"
-                        onClick={() => onBrowseSubject(subj)}
-                        title="Browse BSIT curriculum courses to match and credit"
-                      >
-                        <BookOpen className="w-3.5 h-3.5" />
-                        Browse & Match
-                      </Button>
+                      <div className="flex items-center justify-end gap-2 flex-wrap">
+                        <Button
+                          size="sm"
+                          className="bg-maroon hover:bg-maroon-dark text-white h-7 text-xs px-3 font-medium inline-flex items-center gap-1.5 shadow-2xs transition-colors"
+                          onClick={() => onBrowseSubject(subj)}
+                          title="Browse BSIT curriculum courses to match and credit"
+                        >
+                          <BookOpen className="w-3.5 h-3.5" />
+                          Browse &amp; Match
+                        </Button>
+                        {onDisregard && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs px-3 font-medium inline-flex items-center gap-1.5 border-red-300 text-red-700 hover:bg-red-50 hover:border-red-400 transition-colors"
+                            onClick={() => onDisregard(subj)}
+                            title="Disregard this subject — not applicable to any BSIT curriculum"
+                          >
+                            <XCircle className="w-3 h-3" />
+                            Disregard
+                          </Button>
+                        )}
+                      </div>
                     )}
                   </td>
                 </tr>

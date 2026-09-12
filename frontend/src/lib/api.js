@@ -55,6 +55,7 @@ export const applicationApi = {
   finalize: (id, data) => apiClient.post(`/applications/${id}/finalize/`, data),
   reject: (id, data) => apiClient.post(`/applications/${id}/reject/`, data),
   process: (id) => apiClient.post('/application/process/', { application_id: id }),
+  runFullEvaluation: (id) => apiClient.post('/application/process/', { application_id: id }),
   summary: (id) => apiClient.get(`/applications/${id}/summary/`),
 };
 
@@ -82,6 +83,12 @@ export const subjectMatchApi = {
   approve: (id, note) => apiClient.post(`/subject-matches/${id}/approve/`, { note }),
   reject: (id, note) => apiClient.post(`/subject-matches/${id}/reject/`, { note }),
   override: (id, data) => apiClient.post(`/subject-matches/${id}/override/`, data),
+  disregardTorSubject: (applicationId, torSubjectId, note) =>
+    apiClient.post('/subject-matches/disregard-tor-subject/', {
+      application_id: applicationId,
+      tor_subject_id: torSubjectId,
+      note,
+    }),
 };
 
 export const programApi = {

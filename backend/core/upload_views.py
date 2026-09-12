@@ -356,15 +356,24 @@ def add_work_experience(request):
 @permission_classes([IsAuthenticated])
 def process_application(request):
     """
-    Process application: match TOR subjects + work experience to curriculum
-    Generate course recommendation and predictions
+    Process application: match TOR subjects + work experience to curriculum.
+    Generate course recommendation and predictions.
+
+    This endpoint is restricted to evaluators and admins only.
+    AI matching is intentionally deferred from applicant submission and is
+    triggered manually by the Department Chair via the evaluator review page.
     """
+    # Only evaluators and admins can trigger AI evaluation
+    if request.user.role not in ['evaluator', 'admin']:
+        return Response(
+            {'error': 'Only evaluators and administrators can run AI evaluation.'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
     application_id = request.data.get('application_id')
     
     try:
         application = Application.objects.get(id=application_id)
-        if application.applicant != request.user and request.user.role not in ['evaluator', 'admin']:
-            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     except Application.DoesNotExist:
         return Response({'error': 'Application not found'}, status=status.HTTP_404_NOT_FOUND)
     
@@ -375,14 +384,15 @@ def process_application(request):
         run_full_evaluation_sync(str(application.id))
         application.refresh_from_db()
         return Response({
-            'message': 'Application processed successfully',
+            'message': 'AI evaluation completed successfully',
             'application': ApplicationSerializer(application).data
         })
     except Exception as e:
-        print(f"Process application error: {str(e)}")
+        print(f"Process application error: {str(e)}") 
         application.status = 'submitted'
         application.save()
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 def _match_single_tor_subject(tor_subject, program, curriculum_list):
