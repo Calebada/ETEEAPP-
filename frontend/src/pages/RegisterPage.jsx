@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card } from '../components/ui/card';
 import { useAuth } from '../lib/auth-context';
-import { GraduationCap, Loader2, AlertCircle } from 'lucide-react';
+import { Loader2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 export const RegisterPage = () => {
@@ -71,9 +71,7 @@ export const RegisterPage = () => {
         />
         <div className="relative z-10 flex flex-col justify-between p-12 text-white">
           <Link to="/" className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-lg bg-gold flex items-center justify-center">
-              <GraduationCap className="w-7 h-7 text-gray-900" />
-            </div>
+            <img src="/logo.png" alt="ACCREDIA" className="h-12 w-auto object-contain" />
             <div>
               <div className="font-serif font-bold text-2xl">ACCREDIA</div>
               <div className="text-xs uppercase tracking-wider opacity-80">CIT-University</div>
@@ -99,9 +97,7 @@ export const RegisterPage = () => {
       <div className="flex-1 flex items-center justify-center p-6 lg:p-12 bg-gray-50">
         <Card className="w-full max-w-md p-8 border-gray-200" data-testid="register-card">
           <div className="lg:hidden flex items-center gap-2 mb-8">
-            <div className="w-10 h-10 rounded-lg bg-maroon flex items-center justify-center">
-              <GraduationCap className="w-6 h-6 text-white" />
-            </div>
+            <img src="/logo.png" alt="ACCREDIA" className="h-10 w-auto object-contain" />
             <div>
               <div className="font-serif font-bold text-xl text-maroon">ACCREDIA</div>
               <div className="text-xs text-gray-500 uppercase tracking-wider">CIT-U</div>

@@ -1,8 +1,8 @@
-import React from 'react';
+﻿import React from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/auth-context';
 import { Button } from './ui/button';
-import { GraduationCap, LogOut, LayoutDashboard, FileText, Users, Settings, User } from 'lucide-react';
+import { LogOut, LayoutDashboard, FileText, Users, Settings, User } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger
@@ -50,9 +50,7 @@ export const Navbar = () => {
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center gap-8">
             <Link to={user ? `/${user.role}` : '/'} className="flex items-center gap-2" data-testid="navbar-logo">
-              <div className="w-10 h-10 rounded-lg bg-maroon flex items-center justify-center">
-                <GraduationCap className="w-6 h-6 text-white" />
-              </div>
+              <img src="/logo.png" alt="ACCREDIA" className="h-10 w-auto object-contain" />
               <div>
                 <div className="font-serif font-bold text-xl text-maroon leading-none">ACCREDIA</div>
                 <div className="text-xs text-gray-500 uppercase tracking-wider">CIT-U</div>
