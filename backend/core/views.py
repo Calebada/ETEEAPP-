@@ -684,18 +684,33 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
         ).delete()
 
         # Create (or update) a rejected match with no curriculum subject
-        match, created = SubjectMatch.objects.update_or_create(
+        existing = SubjectMatch.objects.filter(
             application=application,
             tor_subject=tor_subject,
             curriculum_subject=None,
-            defaults={
-                'source': 'tor',
-                'confidence': 0,
-                'status': 'rejected',
-                'evaluator_note': note,
-                'matching_reason': 'Disregarded by evaluator — not applicable to any BSIT curriculum subject'
-            }
         )
+        if existing.exists():
+            match = existing.first()
+            match.source = 'tor'
+            match.confidence = 0
+            match.status = 'rejected'
+            match.evaluator_note = note
+            match.matching_reason = 'Disregarded by evaluator — not applicable to any BSIT curriculum subject'
+            match.save()
+            existing.exclude(id=match.id).delete()
+            created = False
+        else:
+            match = SubjectMatch.objects.create(
+                application=application,
+                tor_subject=tor_subject,
+                curriculum_subject=None,
+                source='tor',
+                confidence=0,
+                status='rejected',
+                evaluator_note=note,
+                matching_reason='Disregarded by evaluator — not applicable to any BSIT curriculum subject'
+            )
+            created = True
 
         return Response(SubjectMatchSerializer(match).data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
@@ -727,18 +742,33 @@ class SubjectMatchViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
-        match, created = SubjectMatch.objects.update_or_create(
+        existing_matches = SubjectMatch.objects.filter(
             application_id=application_id,
             curriculum_subject_id=curriculum_subject_id,
-            defaults={
-                'tor_subject_id': tor_subject_id if source == 'tor' else None,
-                'work_experience_id': work_experience_id if source == 'work_experience' else None,
-                'source': source,
-                'confidence': 100.0,
-                'status': 'approved',
-                'evaluator_note': note or 'Manually matched and approved by evaluator'
-            }
         )
+        if existing_matches.exists():
+            match = existing_matches.first()
+            match.tor_subject_id = tor_subject_id if source == 'tor' else None
+            match.work_experience_id = work_experience_id if source == 'work_experience' else None
+            match.source = source
+            match.confidence = 100.0
+            match.status = 'approved'
+            match.evaluator_note = note or 'Manually matched and approved by evaluator'
+            match.save()
+            existing_matches.exclude(id=match.id).delete()
+            created = False
+        else:
+            match = SubjectMatch.objects.create(
+                application_id=application_id,
+                curriculum_subject_id=curriculum_subject_id,
+                tor_subject_id=tor_subject_id if source == 'tor' else None,
+                work_experience_id=work_experience_id if source == 'work_experience' else None,
+                source=source,
+                confidence=100.0,
+                status='approved',
+                evaluator_note=note or 'Manually matched and approved by evaluator'
+            )
+            created = True
 
         # Enforce 1-to-1 matching: remove any other pending matches
         if tor_subject_id:

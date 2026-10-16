@@ -102,7 +102,6 @@ export const LoginPage = () => {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
                 required
                 data-testid="login-email-input"
                 className="mt-1"
@@ -116,7 +115,6 @@ export const LoginPage = () => {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
                 required
                 data-testid="login-password-input"
                 className="mt-1"

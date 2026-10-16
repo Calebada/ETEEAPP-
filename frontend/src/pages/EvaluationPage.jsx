@@ -45,8 +45,9 @@ export const EvaluationPage = () => {
       setPrediction(predResp.data);
     } catch (err) {
       toast.error('Failed to load evaluation');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const downloadReport = () => {

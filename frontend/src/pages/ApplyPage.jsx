@@ -7,6 +7,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Badge } from '../components/ui/badge';
+import { Dialog, DialogContent } from '../components/ui/dialog';
 import { applicationApi, documentApi, workExperienceApi, courseApi, programApi } from '../lib/api';
 import {
   ArrowRight, ArrowLeft, Upload, FileText, Briefcase, CheckCircle2,
@@ -39,10 +40,34 @@ export const ApplyPage = () => {
   const [documents, setDocuments] = useState([]);
   // Track uploading state per document type so only the relevant card shows loading
   const [uploadingByType, setUploadingByType] = useState({});
+  const [uploadingTorModal, setUploadingTorModal] = useState(false);
+  const [uploadingTorFileName, setUploadingTorFileName] = useState('');
+  const [torUploadStepIndex, setTorUploadStepIndex] = useState(0);
   const [deletingDocId, setDeletingDocId] = useState(null);
   const [reprocessingDocId, setReprocessingDocId] = useState(null);
   const [prequalificationError, setPrequalificationError] = useState('');
   const [prequalificationCauses, setPrequalificationCauses] = useState([]);
+
+  const torUploadSteps = [
+    'Uploading transcript to secure cloud...',
+    'Scanning pages with PyMuPDF & RapidOCR...',
+    'Extracting subject codes, descriptions & grades...',
+    'Parsing academic units and evaluating completeness...',
+    'Almost done, saving extracted subjects...',
+  ];
+
+  useEffect(() => {
+    let interval;
+    if (uploadingTorModal) {
+      setTorUploadStepIndex(0);
+      interval = setInterval(() => {
+        setTorUploadStepIndex((prev) => (prev + 1) % torUploadSteps.length);
+      }, 3000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [uploadingTorModal]);
 
   // Build a short, human-friendly summary from the backend causes
   const buildPrequalificationSummary = (causes) => {
@@ -192,32 +217,52 @@ export const ApplyPage = () => {
     }
     
     setUploadingByType(prev => ({ ...prev, [documentType]: true }));
+    if (documentType === 'tor') {
+      setUploadingTorModal(true);
+      setUploadingTorFileName(file.name);
+    }
+
     try {
       const reader = new FileReader();
       reader.onload = async (e) => {
-        const base64 = e.target.result.split(',')[1];
-        const response = await documentApi.upload({
-          application_id: id,
-          document_type: documentType,
-          file_name: file.name,
-          file_data: base64,
-          mime_type: file.type,
-        });
-        
-        setDocuments(prev => [...prev, response.data]);
-        setPrequalificationError('');
-        setPrequalificationCauses([]);
-        toast.success(`${documentType.toUpperCase()} uploaded successfully`);
-        
-        if (documentType === 'tor') {
-          toast.info('AI is now analyzing your TOR. This may take a moment.');
+        try {
+          const base64 = e.target.result.split(',')[1];
+          const response = await documentApi.upload({
+            application_id: id,
+            document_type: documentType,
+            file_name: file.name,
+            file_data: base64,
+            mime_type: file.type,
+          });
+          
+          setDocuments(prev => [...prev, response.data]);
+          setPrequalificationError('');
+          setPrequalificationCauses([]);
+          toast.success(`${documentType.toUpperCase()} uploaded successfully`);
+          
+          if (documentType === 'tor') {
+            toast.info('TOR scanned and courses extracted successfully!');
+          }
+        } catch (uploadErr) {
+          const msg = uploadErr.response?.data?.error || uploadErr.response?.data?.detail || 'Upload failed';
+          toast.error(msg);
+        } finally {
+          setUploadingByType(prev => ({ ...prev, [documentType]: false }));
+          if (documentType === 'tor') {
+            setUploadingTorModal(false);
+          }
+          if (event?.target) {
+            event.target.value = '';
+          }
         }
-        setUploadingByType(prev => ({ ...prev, [documentType]: false }));
       };
       reader.readAsDataURL(file);
     } catch (err) {
       toast.error('Upload failed');
       setUploadingByType(prev => ({ ...prev, [documentType]: false }));
+      if (documentType === 'tor') {
+        setUploadingTorModal(false);
+      }
     }
   };
 
@@ -477,10 +522,8 @@ export const ApplyPage = () => {
       await applicationApi.submit(id);
       toast.success('Application submitted successfully! The Department Chair will review and run AI evaluation.');
       
-      // AI processing (subject matching) is NOT triggered here.
-      // It will be run by the Department Chair via the "Run AI Evaluation" button in the evaluator review page.
-      
-      navigate(`/applicant/evaluation/${id}`);
+      // Navigate back to the applicant dashboard
+      navigate('/applicant');
     } catch (err) {
       const causes = Array.isArray(err.response?.data?.causes) ? err.response.data.causes : [];
       const reason = err.response?.data?.error || err.response?.data?.detail || 'Failed to submit application';
@@ -993,6 +1036,78 @@ export const ApplyPage = () => {
             </div>
           </Card>
         )}
+
+        {/* Uploading TOR Pop Animation Modal */}
+        <Dialog open={uploadingTorModal} onOpenChange={() => {}}>
+          <DialogContent
+            className="sm:max-w-md p-0 overflow-hidden border-0 shadow-2xl rounded-2xl bg-white focus:outline-none [&>button]:hidden animate-in fade-in zoom-in-95 duration-300"
+            onPointerDownOutside={(e) => e.preventDefault()}
+            onEscapeKeyDown={(e) => e.preventDefault()}
+          >
+            {/* Top Glowing Header Strip */}
+            <div className="h-2 w-full bg-gradient-to-r from-maroon via-gold to-maroon animate-pulse" />
+
+            <div className="p-6 sm:p-8 text-center flex flex-col items-center">
+              {/* Animated Icon with Glowing Waves */}
+              <div className="relative mb-5">
+                {/* Pulsing Aura */}
+                <div className="absolute -inset-3 bg-gradient-to-tr from-maroon/20 to-gold/30 rounded-full blur-xl animate-pulse" />
+
+                {/* Outer Rotating/Spinning Ring */}
+                <div className="relative w-20 h-20 rounded-full border-[3.5px] border-maroon/20 border-t-maroon border-r-gold animate-spin flex items-center justify-center bg-white shadow-lg">
+                  {/* Inner Floating Badge */}
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-maroon to-maroon-dark text-white flex items-center justify-center shadow-inner">
+                    <FileText className="w-6 h-6 animate-pulse" />
+                  </div>
+                </div>
+
+                {/* Sparkling Indicator */}
+                <div className="absolute -top-1 -right-1 bg-gold text-white p-1 rounded-full shadow-md animate-bounce">
+                  <Sparkles className="w-3.5 h-3.5 text-white" />
+                </div>
+              </div>
+
+              {/* Title */}
+              <h3 className="font-serif text-xl sm:text-2xl font-bold text-gray-900 mb-2">
+                Uploading TOR, wait a minute...
+              </h3>
+
+              {/* Subtitle */}
+              <p className="text-sm text-gray-600 mb-4 max-w-xs leading-relaxed">
+                Please wait while we upload your Transcript of Records and automatically extract your courses, grades, and units.
+              </p>
+
+              {/* Current Filename Badge */}
+              {uploadingTorFileName && (
+                <div className="mb-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-maroon/5 border border-maroon/15 text-maroon text-xs font-semibold max-w-full truncate shadow-2xs">
+                  <FileText className="w-3.5 h-3.5 flex-shrink-0 text-maroon" />
+                  <span className="truncate max-w-[260px]">{uploadingTorFileName}</span>
+                </div>
+              )}
+
+              {/* Dynamic Step Status Banner */}
+              <div className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 mb-4 shadow-2xs">
+                <div className="flex items-center justify-center gap-2 text-xs font-semibold text-maroon">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-maroon flex-shrink-0" />
+                  <span className="transition-all duration-300">{torUploadSteps[torUploadStepIndex]}</span>
+                </div>
+              </div>
+
+              {/* Animated Progress Bar */}
+              <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden mb-4">
+                <div
+                  className="h-full bg-gradient-to-r from-maroon via-gold to-maroon rounded-full transition-all duration-700 ease-out animate-pulse"
+                  style={{ width: `${Math.min(20 + torUploadStepIndex * 20, 95)}%` }}
+                />
+              </div>
+
+              {/* Reassurance note */}
+              <p className="text-[11px] text-gray-400 leading-normal">
+                ⚡ Multi-page or scanned transcripts can take up to 30–60 seconds. Please do not close or refresh this tab.
+              </p>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

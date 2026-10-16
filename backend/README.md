@@ -1,128 +1,114 @@
-# ACCREDIA — Backend
+# ACCREDIA — Backend Service
 
-Django REST API for the **ACCREDIA** AI-Assisted ETEEAP Enrollment System (CIT Institute).
+Django REST API and AI evaluation pipeline for the **ACCREDIA** AI-Assisted ETEEAP Enrollment System (Cebu Institute of Technology – University).
 
 ---
 
-## 🧰 Tech Stack
+## 🧰 Tech Stack & Engines
 
-- **Django 5.2** — web framework
-- **Django REST Framework** — API
-- **PostgreSQL / SQLite** — database (Postgres recommended for production)
-- **Gemini API** — primary AI provider
-- **PyMuPDF, RapidOCR / EasyOCR** — document text extraction
-- **SimpleJWT** — authentication
+- **Python 3.11+ / 3.12** — core language
+- **Django 5.2** (`Django==5.2.14`) — web framework
+- **Django REST Framework** (`djangorestframework==3.17.1`) — RESTful API layer
+- **PostgreSQL / SQLite** — database (PostgreSQL via Supabase in production, SQLite or Postgres in dev)
+- **Google Gemini API** (`google-genai==2.4.0`, `google-generativeai==0.8.6`) — primary LLM provider (`gemini-flash-latest`, `gemini-3.6-flash`, `gemini-pro-latest`)
+- **PyMuPDF (fitz)** (`PyMuPDF==1.26.3`) — digital PDF vector text & layout extraction
+- **RapidOCR ONNX Runtime** (`rapidocr-onnxruntime==1.4.4`) — high-performance OCR for scanned transcripts
+- **SimpleJWT** (`djangorestframework_simplejwt==5.5.1`) — token-based authentication with role enforcement
+- **django-cors-headers** (`django-cors-headers==4.9.0`) — CORS configuration
 
 ---
 
 ## 📋 Prerequisites
 
-- **Python 3.11+** (3.12 recommended)
-- **virtualenv** support
-- A **Gemini API key** *(optional)* — AI features work without it using local fallback logic
-
-Check your version:
-
-```powershell
-python --version
-```
+- **Python 3.11+** installed (`python --version`)
+- **virtualenv** or Python's built-in `venv`
+- A **Gemini API Key** *(optional; if omitted, the system seamlessly falls back to its local heuristic rule engine)*
 
 ---
 
-## 🚀 Setup & Run
+## 🚀 Local Setup & Run
 
-### 1. Create and activate a virtual environment
+### 1. Create and Activate Virtual Environment
 
 **Windows (PowerShell):**
-
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
+*(If PowerShell restricts script execution, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` or activate with `.\.venv\Scripts\activate.bat` in CMD).*
 
-**macOS / Linux (bash):**
-
+**macOS / Linux:**
 ```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 2. Install Python dependencies
+### 2. Install Dependencies
 
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-> On Windows, some native packages may require **Visual C++ Build Tools**. On Linux, ensure `libjpeg` / `libpng` dev libraries are installed.
+### 3. Configure Environment Variables
 
-### 3. Configure environment variables
+Create `.env` in `backend/`:
 
-Copy the example file:
-
-```powershell
-copy .env.example .env
+```env
+SECRET_KEY=django-insecure-your-secret-key
+DEBUG=True
+DATABASE_URL=sqlite:///db.sqlite3
+# For Supabase/PostgreSQL connection:
+# DATABASE_URL=postgresql://user:password@host:port/dbname
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
-Then fill in your values:
-
-| Variable | Purpose |
-|----------|---------|
-| `SECRET_KEY` | Django secret key (any random string in dev) |
-| `DEBUG` | `True` for development, `False` for production |
-| `DATABASE_URL` | e.g. `sqlite:///db.sqlite3` or a Postgres URL |
-| `GEMINI_API_KEY` | Gemini AI key (optional; enables AI features) |
-| `ALLOWED_HOSTS` | Comma-separated hosts for production |
-| `REACT_APP_BACKEND_URL` | Frontend API base URL |
-
-### 4. Run migrations and create a superuser
+### 4. Run Migrations & Setup Media
 
 ```bash
-cd backend
 python manage.py migrate
-python manage.py createsuperuser
 ```
 
-### 5. Prepare media folders
+Create media folders:
+- Windows PowerShell: `New-Item -ItemType Directory -Force -Path media\docs`
+- Linux / macOS: `mkdir -p media/docs`
 
-```powershell
-mkdir backend\media
-mkdir backend\media\docs
-```
-
-### 6. Start the development server
+### 5. Start Development Server
 
 ```bash
-cd backend
-python manage.py runserver 0.0.0.0:8000
+python manage.py runserver 127.0.0.1:8000
 ```
 
-API is served at `http://localhost:8000/api/` and the admin panel at `http://localhost:8000/admin/`.
+- API Base: `http://localhost:8000/api/`
+- Health check: `http://localhost:8000/api/`
+- Django Admin: `http://localhost:8000/admin/`
 
 ---
 
-## 🔑 AI Provider Stack
+## 🔑 AI Fallback Pipeline
 
-1. **Gemini (primary)** — uses `GEMINI_API_KEY`
-2. **Emergent (fallback)** — uses `EMERGENT_LLM_KEY` *(if installed)*
-3. **Local logic (last resort)** — regex/keyword matching (no key needed)
+The backend includes a resilient 3-tier fallback architecture:
+1. **Google Gemini API (Primary):** Analyzes course syllabi, matches industry skills to BSIT competencies, and powers AccrediaBot.
+2. **Emergent Fallback:** Redundant provider support.
+3. **Local Heuristic Rule Engine (Offline Fallback):** Regex-based code and title similarity with unit verification. Automatically skips external AI calls if local match confidence is $\ge 90\%$.
 
-Safeguards are built in: a 45-second timeout on every AI call (`AI_CALL_TIMEOUT`), and AI is skipped entirely when local matching is ≥90% confident (`LOCAL_MATCH_SKIP_AI_THRESHOLD`).
+All external AI requests are bounded by a 45-second timeout safeguard (`AI_CALL_TIMEOUT`).
 
 ---
 
-## 🧪 Tests
+## 🧪 Testing
 
 ```bash
-cd backend
 python manage.py test
+python tests/test_matching_verification.py
 ```
 
 ---
 
-## 📁 Notes
+## 📖 Global Architecture
 
-- Development defaults to SQLite; production should use PostgreSQL with `psycopg2-binary`.
-- Full project overview and architecture live in the **root [`README.md`](../README.md)**.
+For comprehensive system architecture, database schema, and live deployment details, refer to the [Root README](../README.md).

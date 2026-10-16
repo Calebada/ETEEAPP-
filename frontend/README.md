@@ -1,90 +1,90 @@
-# ACCREDIA — Frontend
+# ACCREDIA — Frontend Application
 
-React.js frontend for the **ACCREDIA** AI-Assisted ETEEAP Enrollment System (CIT-U).
+React Single Page Application (SPA) for the **ACCREDIA** AI-Assisted ETEEAP Enrollment System (Cebu Institute of Technology – University).
 
 ---
 
 ## 🧰 Tech Stack
 
-- **React 19** — UI framework
-- **Create React App + CRACO** — build tooling
-- **Tailwind CSS** — styling
-- **shadcn/ui (Radix)** — component library
-- **React Router** — routing
-- **Axios** — API communication
-- **Recharts** — charts
+- **React 19** (`react: ^19.0.0`, `react-dom: ^19.0.0`) — modern React UI foundation
+- **React Router DOM v7** (`react-router-dom: ^7.5.1`) — declarative client-side routing
+- **Tailwind CSS 3** (`tailwindcss: ^3.4.17`) — utility-first CSS styling
+- **shadcn/ui (Radix Primitives)** — accessible, customizable component layer
+- **CRACO & Create React App** (`@craco/craco: ^7.1.0`) — configuration override & build tooling
+- **Lucide React** (`lucide-react: ^0.507.0`) — iconography
+- **Recharts** (`recharts: ^3.6.0`) — data visualization for academic progress & evaluation metrics
+- **jsPDF** (`jspdf: ^4.2.1`) — client-side PDF Evaluation Summary report generation
+- **Axios** (`axios: ^1.8.4`) — REST API client with JWT interceptors
+- **CIT-U Palette:** Maroon (`#7a1e2b`) and Gold (`#d4a747`)
 
 ---
 
 ## 📋 Prerequisites
 
-- **Node.js 18+** (or current LTS)
-- **npm** or **Yarn**
-
-Check your versions:
-
-```powershell
-node --version
-npm  --version
-```
+- **Node.js 18+** or **20+ LTS** (`node -v`)
+- **npm** or **Yarn** (`npm -v` / `npm.cmd -v`)
 
 ---
 
-## 🚀 Setup & Run
+## 🚀 Local Setup & Run
 
-### 1. Install dependencies
+### 1. Install Dependencies
 
 ```bash
 cd frontend
-npm install        # or: yarn install
+npm install
 ```
+*(On Windows PowerShell, use `npm.cmd install` if script execution policies are restricted).*
 
-> A `.npmrc` file is committed with `legacy-peer-deps=true` to keep installs conflict-free with React 19. No action needed.
+> **Note:** A `.npmrc` file is included with `legacy-peer-deps=true` to avoid dependency peer conflicts with React 19.
 
-### 2. Configure the environment
+### 2. Configure Environment
 
-Create a `.env` file in `frontend/`:
+Create `.env` inside `frontend/`:
 
-```text
+```env
 REACT_APP_BACKEND_URL=http://localhost:8000
 ```
 
-- `REACT_APP_BACKEND_URL` — URL of the running backend (no trailing slash).
+> **Note:** `REACT_APP_BACKEND_URL` is baked in at build time. When deploying to staging or production, point this to your deployed backend URL (no trailing slash).
 
-> ⚠️ CRA bakes env vars **at build time**. If you change this later, rebuild/redeploy.
+### 3. Run Development Server
 
-### 3. Run the development server
+- **Windows PowerShell:**
+  ```powershell
+  $env:BROWSER="none"; npm.cmd start
+  ```
+- **macOS / Linux:**
+  ```bash
+  BROWSER=none npm start
+  ```
+
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### 4. Build for Production
 
 ```bash
-cd frontend
-npm start
-```
-
-Open [http://localhost:3000](http://localhost:3000). The page auto-reloads on edits and shows lint errors in the console.
-
-### 4. Build for production
-
-```bash
-cd frontend
 npm run build
 ```
 
-Output is emitted to the `build/` folder — a static site ready to deploy (serving this folder is enough; no server-side rendering).
+This generates an optimized static build in the `build/` directory ready for deployment.
 
 ---
 
 ## 🌐 Deploying to Vercel
 
-1. Import the repository in Vercel.
-2. Set the **Root Directory** to `frontend`.
-3. **Build Command:** `npm run build` · **Output Directory:** `build`.
-4. Add the environment variable `REACT_APP_BACKEND_URL` pointing to your deployed backend.
-5. Deploy — every push to `main` automatically triggers a new production deployment, and any branch/PR gets a preview URL.
-
-The committed `frontend/vercel.json` contains SPA rewrites so that refreshing deep links (e.g. `/login`) does not 404.
+1. Import the Git repository in [Vercel](https://vercel.com).
+2. Set **Root Directory** to `frontend`.
+3. Set **Framework Preset** to `Create React App`.
+4. Configure Build & Output:
+   - **Build Command:** `npm run build`
+   - **Output Directory:** `build`
+5. Under **Environment Variables**, add:
+   - `REACT_APP_BACKEND_URL`: `https://accredia-backend.onrender.com`
+6. Deploy. Deep links (such as `/evaluator/review/:id`) work seamlessly due to SPA rewrite rules defined in `frontend/vercel.json`.
 
 ---
 
-## 📁 Notes
+## 📖 System Overview
 
-- Full project overview and architecture live in the **root [`README.md`](../README.md)**.
+For full architectural diagrams, academic credit rules, and backend integration, see the [Root README](../README.md).

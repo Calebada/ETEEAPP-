@@ -21,13 +21,11 @@ export const Navbar = () => {
       return [
         { label: 'Dashboard', path: '/applicant', icon: LayoutDashboard },
         { label: 'My Applications', path: '/applicant/applications', icon: FileText },
-        { label: 'Profile', path: '/profile', icon: User },
       ];
     }
     if (user.role === 'evaluator') {
       return [
         { label: 'Review Queue', path: '/evaluator', icon: LayoutDashboard },
-        { label: 'Profile', path: '/profile', icon: User },
       ];
     }
     if (user.role === 'admin') {
@@ -35,7 +33,6 @@ export const Navbar = () => {
         { label: 'Dashboard', path: '/admin', icon: LayoutDashboard },
         { label: 'Users', path: '/admin/users', icon: Users },
         { label: 'Curriculum', path: '/admin/curriculum', icon: Settings },
-        { label: 'Profile', path: '/profile', icon: User },
       ];
     }
     return [];
