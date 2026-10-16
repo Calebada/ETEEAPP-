@@ -476,38 +476,47 @@ def run_full_evaluation_sync(application_id):
 
     tor_subjects_to_process = [s for s in tor_subjects if s.id not in reviewed_tor_subject_ids]
     matches_to_create = []
+    claimed_curriculum_ids = set(approved_curriculum_ids)
 
-    # Process TOR subjects using fast matching engine
+    # Process TOR subjects using fast matching engine with strict 1-to-1 matching
     for tor_subject in tor_subjects_to_process:
         try:
-            matches = _match_single_tor_subject(tor_subject, application.program, curriculum_list)
+            available_curriculum_list = [
+                cs for cs in curriculum_list
+                if cs['id'] not in claimed_curriculum_ids and uuid.UUID(cs['id']) not in claimed_curriculum_ids
+            ]
+            matches = _match_single_tor_subject(tor_subject, application.program, available_curriculum_list)
             
+            assigned_subj = None
+            assigned_match_info = None
+
             if matches and len(matches) > 0:
-                best_match = matches[0]
-                norm_target_code = (best_match.get('curriculum_code') or '').upper().replace(' ', '').replace('-', '')
-                curriculum_subj = curriculum_obj_map.get(norm_target_code)
-                
-                # Enforce Unit Sufficiency Rule: Applicant units must be >= curriculum units
-                if tor_subject.units and curriculum_subj and curriculum_subj.units and tor_subject.units < curriculum_subj.units:
-                    matches_to_create.append(SubjectMatch(
-                        application=application,
-                        tor_subject=tor_subject,
-                        curriculum_subject=None,
-                        source='tor',
-                        confidence=0,
-                        status='pending',
-                        matching_reason=f'Insufficient units: TOR subject has {tor_subject.units} unit(s), but {curriculum_subj.code} requires {curriculum_subj.units} unit(s).'
-                    ))
-                else:
-                    matches_to_create.append(SubjectMatch(
-                        application=application,
-                        tor_subject=tor_subject,
-                        curriculum_subject=curriculum_subj,
-                        source='tor',
-                        confidence=float(best_match.get('confidence', 0)),
-                        matching_reason=best_match.get('reasoning', ''),
-                        status='pending'
-                    ))
+                for cand in matches:
+                    norm_target_code = (cand.get('curriculum_code') or '').upper().replace(' ', '').replace('-', '')
+                    curriculum_subj = curriculum_obj_map.get(norm_target_code)
+                    if not curriculum_subj or curriculum_subj.id in claimed_curriculum_ids or str(curriculum_subj.id) in claimed_curriculum_ids:
+                        continue
+
+                    # Enforce Unit Sufficiency Rule: Applicant units must be >= curriculum units
+                    if tor_subject.units and curriculum_subj.units and tor_subject.units < curriculum_subj.units:
+                        continue
+
+                    assigned_subj = curriculum_subj
+                    assigned_match_info = cand
+                    break
+
+            if assigned_subj:
+                claimed_curriculum_ids.add(assigned_subj.id)
+                claimed_curriculum_ids.add(str(assigned_subj.id))
+                matches_to_create.append(SubjectMatch(
+                    application=application,
+                    tor_subject=tor_subject,
+                    curriculum_subject=assigned_subj,
+                    source='tor',
+                    confidence=float(assigned_match_info.get('confidence', 0)),
+                    matching_reason=assigned_match_info.get('reasoning', ''),
+                    status='pending'
+                ))
             else:
                 matches_to_create.append(SubjectMatch(
                     application=application,
@@ -516,7 +525,7 @@ def run_full_evaluation_sync(application_id):
                     source='tor',
                     confidence=0,
                     status='pending',
-                    matching_reason='No matching curriculum subject found'
+                    matching_reason='No unassigned matching curriculum subject found'
                 ))
         except Exception as e:
             print(f"TOR matching error for {tor_subject.code}: {e}")

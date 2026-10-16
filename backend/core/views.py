@@ -365,7 +365,12 @@ class ApplicationViewSet(viewsets.ModelViewSet):
         
         application.status = 'finalized'
         application.finalized_at = timezone.now()
-        application.evaluator_note = request.data.get('evaluator_note', '')
+        note = ''
+        if isinstance(request.data, dict):
+            note = request.data.get('evaluator_note', '')
+        elif isinstance(request.data, str):
+            note = request.data
+        application.evaluator_note = note
         application.save()
         return Response(ApplicationSerializer(application).data)
 
@@ -398,7 +403,12 @@ class ApplicationViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
         
         application.status = 'rejected'
-        application.evaluator_note = request.data.get('evaluator_note', '')
+        note = ''
+        if isinstance(request.data, dict):
+            note = request.data.get('evaluator_note', '')
+        elif isinstance(request.data, str):
+            note = request.data
+        application.evaluator_note = note
         application.save()
         return Response(ApplicationSerializer(application).data)
 

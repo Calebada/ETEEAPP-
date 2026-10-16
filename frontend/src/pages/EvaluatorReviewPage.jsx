@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { DocumentPreviewModal } from '../components/DocumentPreviewModal';
@@ -13,7 +13,7 @@ import { applicationApi, subjectMatchApi, predictionApi, programApi } from '../l
 import {
   ArrowLeft, Loader2, FileText, Briefcase, CheckCircle2, XCircle,
   AlertCircle, BookOpen, User, Calendar, MapPin, Phone, Sparkles, Flag, Eye, Download, Pencil, Trash2,
-  Clock, ChevronDown, ChevronRight, Check, Search, Filter
+  Clock, ChevronDown, ChevronRight, Check, Search, Filter, Award, AlertTriangle, RotateCcw
 } from 'lucide-react';
 import { toast } from 'sonner';
 import jsPDF from 'jspdf';
@@ -77,6 +77,12 @@ export const EvaluatorReviewPage = () => {
   const [finalizationComplete, setFinalizationComplete] = useState(false);
   const [showFullReview, setShowFullReview] = useState(false);
   const [workCreditTarget, setWorkCreditTarget] = useState({ workId: '', curriculumId: '' });
+  const [approvingMatchId, setApprovingMatchId] = useState(null);
+
+  // Modern Confirmation Popups (replaces native window.confirm)
+  const [finalizeDialogOpen, setFinalizeDialogOpen] = useState(false);
+  const [rejectAppDialogOpen, setRejectAppDialogOpen] = useState(false);
+  const [reopenDialogOpen, setReopenDialogOpen] = useState(false);
 
   // Accordion state for Year/Semester dropdown groups
   const [expandedTerms, setExpandedTerms] = useState({});
@@ -381,7 +387,7 @@ export const EvaluatorReviewPage = () => {
     loadData();
   }, [id]);
 
-  const loadData = async () => {
+  const loadData = async (forceReloadAll = false) => {
     try {
       const [appResp, matchesResp, predResp] = await Promise.all([
         applicationApi.get(id),
@@ -395,19 +401,26 @@ export const EvaluatorReviewPage = () => {
       setEvaluatorNote(appResp.data.evaluator_note || '');
       setFinalizationComplete(appResp.data.status === 'finalized' || appResp.data.status === 'rejected');
       
-      try {
+      // Load curriculum once on initial page load (curriculum is static)
+      if (forceReloadAll || curriculum.length === 0) {
         if (appResp.data && appResp.data.program && appResp.data.program.id) {
-          const curResp = await programApi.curriculum(appResp.data.program.id);
-          setCurriculum(curResp.data || []);
+          try {
+            const curResp = await programApi.curriculum(appResp.data.program.id);
+            setCurriculum(curResp.data || []);
+          } catch (e) {
+            setCurriculum([]);
+          }
         }
+      }
+
+      // Load AI summary once on initial page load (prevents repeated 5s Gemini API calls on every action!)
+      if (forceReloadAll || !appSummary) {
         try {
           const sumResp = await applicationApi.summary(id);
           setAppSummary(sumResp.data || null);
         } catch (e) {
-          setAppSummary(null);
+          // ignore summary errors
         }
-      } catch (e) { 
-        setCurriculum([]); 
       }
     } catch (err) {
       toast.error('Failed to load application');
@@ -416,12 +429,45 @@ export const EvaluatorReviewPage = () => {
   };
 
   const handleApproveMatch = async (matchId) => {
+    if (approvingMatchId) return;
+    setApprovingMatchId(matchId);
+
+    const previousMatches = [...matches];
+    const targetMatch = matches.find(m => m.id === matchId);
+    const targetTorId = targetMatch?.tor_subject?.id || targetMatch?.tor_subject_id;
+    const targetCurId = targetMatch?.curriculum_subject?.id || targetMatch?.curriculum_subject_id;
+
+    // Instant Optimistic Update (0ms delay!)
+    setMatches(prev => prev.map(m => {
+      if (m.id === matchId) {
+        return { ...m, status: 'approved' };
+      }
+      // Rule: 1 subject must only match to 1 Subject only - remove conflicting pending matches
+      if (targetMatch) {
+        const mTorId = m.tor_subject?.id || m.tor_subject_id;
+        const mCurId = m.curriculum_subject?.id || m.curriculum_subject_id;
+
+        if (targetTorId && mTorId === targetTorId && m.status === 'pending') {
+          return null;
+        }
+        if (targetCurId && mCurId === targetCurId && m.status === 'pending') {
+          return null;
+        }
+      }
+      return m;
+    }).filter(Boolean));
+
     try {
-      await subjectMatchApi.approve(matchId, '');
+      const resp = await subjectMatchApi.approve(matchId, '');
       toast.success('Subject match approved');
-      loadData();
+      if (resp?.data) {
+        setMatches(prev => prev.map(m => m.id === matchId ? resp.data : m));
+      }
     } catch (err) {
+      setMatches(previousMatches);
       toast.error(err.response?.data?.error || 'Failed to approve match');
+    } finally {
+      setApprovingMatchId(null);
     }
   };
 
@@ -433,18 +479,32 @@ export const EvaluatorReviewPage = () => {
 
   const submitRejectMatch = async () => {
     if (!rejectMatchId) return;
-    setActioning(true);
+    const trimmedReason = rejectReason.trim() || 'Rejected by evaluator';
+    const targetMatchId = rejectMatchId;
+    const previousMatches = [...matches];
+
+    // Close modal instantly so user doesn't wait
+    setRejectDialogOpen(false);
+    setRejectMatchId(null);
+    setRejectReason('');
+
+    // Instant Optimistic Update (0ms delay!)
+    setMatches(prev => prev.map(m => {
+      if (m.id === targetMatchId) {
+        return { ...m, status: 'rejected', evaluator_note: trimmedReason };
+      }
+      return m;
+    }));
+
     try {
-      await subjectMatchApi.reject(rejectMatchId, rejectReason.trim());
+      const resp = await subjectMatchApi.reject(targetMatchId, trimmedReason);
       toast.success('Subject match rejected');
-      setRejectDialogOpen(false);
-      setRejectMatchId(null);
-      setRejectReason('');
-      await loadData();
+      if (resp?.data) {
+        setMatches(prev => prev.map(m => m.id === targetMatchId ? resp.data : m));
+      }
     } catch (err) {
-      toast.error('Failed to reject match');
-    } finally {
-      setActioning(false);
+      setMatches(previousMatches);
+      toast.error(err.response?.data?.error || 'Failed to reject match');
     }
   };
 
@@ -456,38 +516,59 @@ export const EvaluatorReviewPage = () => {
 
   const submitDisregard = async () => {
     if (!disregardSubject) return;
-    setDisregarding(true);
+    const subjectToDisregard = disregardSubject;
+    const note = disregardReason.trim() || 'Disregarded — not applicable to any BSIT curriculum subject';
+    
+    // Close modal instantly
+    setDisregardDialogOpen(false);
+    setDisregardSubject(null);
+    setDisregardReason('');
+
+    // Instant Optimistic Update
+    const tempId = 'temp-disregard-' + Date.now();
+    const optimisticMatch = {
+      id: tempId,
+      tor_subject: subjectToDisregard,
+      tor_subject_id: subjectToDisregard.id,
+      curriculum_subject: null,
+      source: 'tor',
+      status: 'rejected',
+      evaluator_note: note,
+      confidence: 0
+    };
+    setMatches(prev => [...prev.filter(m => m.tor_subject_id !== subjectToDisregard.id || m.status !== 'pending'), optimisticMatch]);
+
     try {
-      await subjectMatchApi.disregardTorSubject(
+      const resp = await subjectMatchApi.disregardTorSubject(
         id,
-        disregardSubject.id,
-        disregardReason.trim() || 'Disregarded — not applicable to any BSIT curriculum subject'
+        subjectToDisregard.id,
+        note
       );
-      toast.success(`"${disregardSubject.code}" disregarded and moved to Rejected Subjects`);
-      setDisregardDialogOpen(false);
-      setDisregardSubject(null);
-      setDisregardReason('');
-      await loadData();
+      toast.success(`"${subjectToDisregard.code}" disregarded and moved to Rejected Subjects`);
+      if (resp?.data) {
+        setMatches(prev => prev.map(m => m.id === tempId ? resp.data : m));
+      }
     } catch (err) {
+      setMatches(prev => prev.filter(m => m.id !== tempId));
       toast.error(err.response?.data?.error || 'Failed to disregard subject');
-    } finally {
-      setDisregarding(false);
     }
   };
 
   const handleRemoveMatch = async (matchId) => {
     const targetId = matchId || removeMatchId;
     if (!targetId) return;
-    setActioning(true);
+    const previousMatches = [...matches];
+    setRemoveMatchId(null);
+
+    // Instant Optimistic Update
+    setMatches(prev => prev.filter(m => m.id !== targetId));
+
     try {
       await subjectMatchApi.delete(targetId);
       toast.success('Subject match removed');
-      setRemoveMatchId(null);
-      await loadData();
     } catch (err) {
+      setMatches(previousMatches);
       toast.error(err.response?.data?.error || 'Failed to remove subject match');
-    } finally {
-      setActioning(false);
     }
   };
 
@@ -498,26 +579,30 @@ export const EvaluatorReviewPage = () => {
       return;
     }
 
+    const previousMatches = [...matches];
     setActioning(true);
-    let successCount = 0;
-    let failCount = 0;
 
-    for (const match of pendingTorMatches) {
-      try {
-        await subjectMatchApi.approve(match.id, '');
-        successCount++;
-      } catch (err) {
-        failCount++;
+    // Instant Optimistic Update for all pending matches
+    setMatches(prev => prev.map(m => {
+      if (m.source === 'tor' && m.status === 'pending' && m.curriculum_subject) {
+        return { ...m, status: 'approved' };
       }
-    }
+      return m;
+    }));
 
-    setActioning(false);
-    if (failCount === 0) {
-      toast.success(`All ${successCount} TOR matches approved!`);
-    } else {
-      toast.error(`Approved ${successCount}, failed ${failCount}`);
+    try {
+      // Execute all approvals in parallel via Promise.all (fast!)
+      await Promise.all(pendingTorMatches.map(match => subjectMatchApi.approve(match.id, '')));
+      toast.success(`All ${pendingTorMatches.length} TOR matches approved!`);
+      // Light background refresh of match list
+      const matchesResp = await subjectMatchApi.list(id);
+      setMatches(matchesResp.data || []);
+    } catch (err) {
+      setMatches(previousMatches);
+      toast.error('Failed to approve some matches');
+    } finally {
+      setActioning(false);
     }
-    loadData();
   };
 
   const handleManualMatchTorToCurriculum = async (torSubjectId, curriculumSubjectId) => {
@@ -578,60 +663,67 @@ export const EvaluatorReviewPage = () => {
     }
   };
 
-  const handleFinalize = async () => {
+  const openFinalizeDialog = () => {
     const approvedMatches = matches.filter(m => m.status === 'approved');
     if (approvedMatches.length === 0) {
       toast.error('Cannot finalize: No subjects have been approved for accreditation.');
       return;
     }
+    setFinalizeDialogOpen(true);
+  };
 
-    if (!window.confirm(`Are you sure you want to finalize accreditation for ${application?.applicant?.full_name}? This will record ${approvedMatches.length} accredited subjects.`)) {
-      return;
-    }
-
+  const confirmFinalize = async () => {
     setActioning(true);
     try {
-      await applicationApi.finalize(id, evaluatorNote);
+      await applicationApi.finalize(id, { evaluator_note: evaluatorNote });
       toast.success('Application finalized successfully!');
       setFinalizationComplete(true);
       setShowFullReview(false);
+      setFinalizeDialogOpen(false);
       loadData();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to finalize application');
+    } finally {
+      setActioning(false);
     }
-    setActioning(false);
   };
 
-  const handleReject = async () => {
-    if (!window.confirm('Are you sure you want to reject this entire application?')) {
-      return;
-    }
+  const openRejectAppDialog = () => {
+    setRejectAppDialogOpen(true);
+  };
+
+  const confirmRejectApp = async () => {
     setActioning(true);
     try {
-      await applicationApi.reject(id, evaluatorNote);
+      await applicationApi.reject(id, { evaluator_note: evaluatorNote });
       toast.success('Application rejected');
+      setRejectAppDialogOpen(false);
       navigate('/evaluator');
     } catch (err) {
       toast.error('Failed to reject application');
+    } finally {
+      setActioning(false);
     }
-    setActioning(false);
   };
 
-  const handleReopen = async () => {
-    if (!window.confirm('Are you sure you want to reopen this application for review and editing?')) {
-      return;
-    }
+  const openReopenDialog = () => {
+    setReopenDialogOpen(true);
+  };
+
+  const confirmReopen = async () => {
     setActioning(true);
     try {
       await applicationApi.update(id, { status: 'under_review' });
       toast.success('Application moved back to Under Review');
       setFinalizationComplete(false);
       setShowFullReview(false);
+      setReopenDialogOpen(false);
       loadData();
     } catch (err) {
       toast.error('Failed to reopen application');
+    } finally {
+      setActioning(false);
     }
-    setActioning(false);
   };
 
   const handleRunAI = async () => {
@@ -753,11 +845,13 @@ export const EvaluatorReviewPage = () => {
   }, [termGroups]);
 
   // Approved curriculum IDs
-  const approvedCurriculumIds = new Set(
-    matches
-      .filter(m => m.curriculum_subject && m.status === 'approved')
-      .map(m => m.curriculum_subject.id)
-  );
+  const approvedCurriculumIds = useMemo(() => {
+    return new Set(
+      matches
+        .filter(m => m.curriculum_subject && m.status === 'approved')
+        .map(m => m.curriculum_subject.id)
+    );
+  }, [matches]);
 
   // Available BSIT Curriculum subjects not yet approved
   const availableCurriculumSubjects = (curriculum || []).filter(
@@ -770,27 +864,72 @@ export const EvaluatorReviewPage = () => {
   }, [availableCurriculumSubjects]);
 
   // Approved TOR subject IDs (strict 1-to-1 matching for transcript courses)
-  const approvedTorSubjectIds = new Set(
-    matches
-      .filter(m => m.tor_subject && m.status === 'approved')
-      .map(m => m.tor_subject.id)
-  );
+  const approvedTorSubjectIds = useMemo(() => {
+    return new Set(
+      matches
+        .filter(m => m.tor_subject && m.status === 'approved')
+        .map(m => m.tor_subject.id)
+    );
+  }, [matches]);
 
   const availableTorSubjects = (torSubjects || []).filter(
     s => !approvedTorSubjectIds.has(s.id)
   );
 
-  // Matched TOR subject IDs (pending, approved, or rejected — rejected subjects
-  // should NOT reappear in the Unmatched list; they are shown in Rejected Subjects)
-  const matchedTorIds = new Set(
+  // Strict 1-to-1 matching for Subject Matches:
+  // - A BSIT subject already approved CANNOT match any other applicant TOR.
+  // - 1 BSIT subject can ONLY match 1 applicant TOR (highest confidence match claims it).
+  // - If a BSIT subject is already matched, other applicant TOR subjects targeting it are removed from Subject Matches tab.
+  const validPendingTorMatches = useMemo(() => {
+    const pendingWithCurriculum = matches
+      .filter(m => m.source === 'tor' && m.status === 'pending' && m.curriculum_subject)
+      .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0));
+
+    const claimedCurriculumIds = new Set(approvedCurriculumIds);
+    const valid = [];
+
+    for (const match of pendingWithCurriculum) {
+      const curId = match.curriculum_subject?.id;
+      if (!curId) continue;
+
+      if (!claimedCurriculumIds.has(curId)) {
+        claimedCurriculumIds.add(curId);
+        valid.push(match);
+      }
+    }
+
+    return valid;
+  }, [matches, approvedCurriculumIds]);
+
+  // Map from tor_subject.id to valid pending SubjectMatch for fast lookup
+  const validPendingTorMatchMap = useMemo(() => {
+    const map = new Map();
+    validPendingTorMatches.forEach(m => {
+      if (m.tor_subject?.id) {
+        map.set(m.tor_subject.id, m);
+      }
+    });
+    return map;
+  }, [validPendingTorMatches]);
+
+  // Active Matched TOR IDs:
+  // - Has an approved match, OR
+  // - Has a valid 1-to-1 pending match in Subject Matches tab, OR
+  // - Was explicitly rejected / disregarded
+  const activeMatchedTorIds = useMemo(() => {
+    const ids = new Set(approvedTorSubjectIds);
     matches
-      .filter(m => m.tor_subject && (m.curriculum_subject || m.status === 'rejected'))
-      .map(m => m.tor_subject.id)
-  );
+      .filter(m => m.tor_subject && m.status === 'rejected')
+      .forEach(m => ids.add(m.tor_subject.id));
+    validPendingTorMatches.forEach(m => {
+      if (m.tor_subject?.id) ids.add(m.tor_subject.id);
+    });
+    return ids;
+  }, [approvedTorSubjectIds, matches, validPendingTorMatches]);
 
   // Unmatched Applicant Scanned Subjects (TOR subjects without a curriculum match)
   const unmatchedTorSubjects = (torSubjects || []).filter(
-    s => !matchedTorIds.has(s.id)
+    s => !activeMatchedTorIds.has(s.id)
   );
 
   // Available Work Experiences (UNLIMITED crediting: all work experiences remain selectable)
@@ -803,9 +942,9 @@ export const EvaluatorReviewPage = () => {
   const approvedMatchesList = matches.filter(m => m.status === 'approved' && m.curriculum_subject);
   // Include all rejected matches (with or without a curriculum subject match)
   const rejectedMatchesList = matches.filter(m => m.status === 'rejected');
-  const pendingMatchesList = matches.filter(m => m.status === 'pending' && m.curriculum_subject);
-  const pendingTorMatches = matches.filter(m => m.source === 'tor' && m.status === 'pending' && m.curriculum_subject);
   const pendingWorkMatches = matches.filter(m => m.source === 'work_experience' && m.status === 'pending' && m.curriculum_subject);
+  const pendingTorMatches = validPendingTorMatches;
+  const pendingMatchesList = [...validPendingTorMatches, ...pendingWorkMatches];
   const totalApprovedUnits = approvedMatchesList.reduce((sum, m) => sum + Number(m.curriculum_subject?.units || 0), 0);
 
   const isFinalized = application?.status === 'finalized' || application?.status === 'rejected';
@@ -877,7 +1016,7 @@ export const EvaluatorReviewPage = () => {
                     Full Audit View
                   </Button>
                   <Button
-                    onClick={handleReopen}
+                    onClick={openReopenDialog}
                     disabled={actioning}
                     variant="outline"
                     className="border-amber-300 text-amber-900 hover:bg-amber-50 flex items-center gap-2"
@@ -1369,7 +1508,7 @@ export const EvaluatorReviewPage = () => {
                             {termGroups.map((group) => {
                               const isExpanded = !!expandedTerms[group.key];
                               const groupMatches = group.subjects
-                                .map(s => matches.find(m => m.tor_subject?.id === s.id && m.curriculum_subject && m.status === 'pending'))
+                                .map(s => validPendingTorMatchMap.get(s.id))
                                 .filter(Boolean);
                               
                               if (groupMatches.length === 0) return null;
@@ -1414,9 +1553,7 @@ export const EvaluatorReviewPage = () => {
                                   {isExpanded && (
                                     <div className="p-4 space-y-3 bg-gray-50/30">
                                       {group.subjects.map((subj) => {
-                                        const match = matches.find(
-                                          m => m.tor_subject?.id === subj.id && m.curriculum_subject && m.status === 'pending'
-                                        );
+                                        const match = validPendingTorMatchMap.get(subj.id);
                                         if (!match) return null;
                                         return (
                                           <SubjectMatchCard
@@ -1427,6 +1564,7 @@ export const EvaluatorReviewPage = () => {
                                             onReject={handleRejectMatch}
                                             getConfidenceColor={getConfidenceColor}
                                             disabled={isFinalized}
+                                            isApproving={approvingMatchId === match.id}
                                             documents={application?.documents || []}
                                             onOpenTorEvidence={(m) => {
                                               const evidence = buildTorEvidence(m, application?.documents || []);
@@ -1463,6 +1601,7 @@ export const EvaluatorReviewPage = () => {
                                     onReject={handleRejectMatch}
                                     getConfidenceColor={getConfidenceColor}
                                     disabled={isFinalized}
+                                    isApproving={approvingMatchId === match.id}
                                     onBrowseModal={setBrowseModalTarget}
                                     onRemoveMatch={setRemoveMatchId}
                                   />
@@ -1493,7 +1632,7 @@ export const EvaluatorReviewPage = () => {
                           termGroups.map((group) => {
                             const isExpanded = !!expandedTerms[group.key];
                             const groupMatches = group.subjects
-                              .map(s => matches.find(m => m.tor_subject?.id === s.id && m.curriculum_subject && m.status === 'pending'))
+                              .map(s => validPendingTorMatchMap.get(s.id))
                               .filter(Boolean);
                             
                             if (groupMatches.length === 0) return null;
@@ -1530,9 +1669,7 @@ export const EvaluatorReviewPage = () => {
                                 {isExpanded && (
                                   <div className="p-4 space-y-3 bg-gray-50/30">
                                     {group.subjects.map((subj) => {
-                                      const match = matches.find(
-                                        m => m.tor_subject?.id === subj.id && m.curriculum_subject && m.status === 'pending'
-                                      );
+                                      const match = validPendingTorMatchMap.get(subj.id);
                                       if (!match) return null;
                                       return (
                                         <SubjectMatchCard
@@ -1543,6 +1680,7 @@ export const EvaluatorReviewPage = () => {
                                           onReject={handleRejectMatch}
                                           getConfidenceColor={getConfidenceColor}
                                           disabled={isFinalized}
+                                          isApproving={approvingMatchId === match.id}
                                           documents={application?.documents || []}
                                           onOpenTorEvidence={(m) => {
                                             const evidence = buildTorEvidence(m, application?.documents || []);
@@ -1640,6 +1778,7 @@ export const EvaluatorReviewPage = () => {
                               onReject={handleRejectMatch}
                               getConfidenceColor={getConfidenceColor}
                               disabled={isFinalized}
+                              isApproving={approvingMatchId === match.id}
                               availableCurriculum={availableCurriculumSubjects}
                               onReassign={loadData}
                               onBrowseModal={setBrowseModalTarget}
@@ -1890,7 +2029,7 @@ export const EvaluatorReviewPage = () => {
 
                     <div className="flex gap-2 flex-wrap pt-2 border-t border-gray-200">
                       <Button 
-                        onClick={handleFinalize}
+                        onClick={openFinalizeDialog}
                         disabled={actioning || approvedMatchesList.length === 0}
                         className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-8 px-4 flex items-center font-medium shadow-2xs"
                         data-testid="finalize-btn"
@@ -1899,7 +2038,7 @@ export const EvaluatorReviewPage = () => {
                         Finalize Accreditation ({totalApprovedUnits} Units)
                       </Button>
                       <Button 
-                        onClick={handleReject}
+                        onClick={openRejectAppDialog}
                         disabled={actioning}
                         variant="outline"
                         className="border-red-300 text-red-600 hover:bg-red-50 text-xs h-8 px-3"
@@ -2235,6 +2374,258 @@ export const EvaluatorReviewPage = () => {
         </DialogContent>
       </Dialog>
 
+      {/* Finalize Accreditation Custom Confirmation Modal */}
+      <Dialog open={finalizeDialogOpen} onOpenChange={setFinalizeDialogOpen}>
+        <DialogContent className="max-w-md sm:max-w-lg p-0 overflow-hidden border-0 shadow-2xl rounded-2xl">
+          {/* Header Accent Bar with CIT-U Maroon & Gold */}
+          <div className="h-2 bg-gradient-to-r from-[#7a1e2b] via-[#9e2a3b] to-[#d4af37]" />
+
+          <div className="p-6 space-y-5">
+            <div className="flex items-start gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 flex-shrink-0 shadow-xs">
+                <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+              </div>
+              <div className="space-y-1">
+                <DialogTitle className="text-lg font-bold text-gray-900">
+                  Finalize Accreditation
+                </DialogTitle>
+                <p className="text-xs text-gray-500">
+                  Review and confirm the accreditation records for this applicant.
+                </p>
+              </div>
+            </div>
+
+            {/* Applicant & Program Info Card */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5 space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="text-xs text-gray-500 font-medium">Applicant:</div>
+                <div className="text-xs font-bold text-gray-900">
+                  {application?.applicant?.full_name || 
+                    `${application?.applicant?.first_name || ''} ${application?.applicant?.last_name || ''}`.trim() || 'Demo Applicant'}
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-2 flex-wrap border-t border-slate-200/60 pt-2">
+                <div className="text-xs text-gray-500 font-medium">Degree Program:</div>
+                <Badge variant="outline" className="text-[11px] font-semibold text-[#7a1e2b] border-[#7a1e2b]/20 bg-rose-50/50">
+                  {application?.program?.name || 'BS Information Technology'}
+                </Badge>
+              </div>
+            </div>
+
+            {/* Credited Summary Stats Grid */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3 text-center">
+                <div className="flex items-center justify-center gap-1.5 text-emerald-800 text-xs font-medium mb-1">
+                  <BookOpen className="w-3.5 h-3.5 text-emerald-600" />
+                  Accredited Courses
+                </div>
+                <div className="text-2xl font-extrabold text-emerald-700">
+                  {approvedMatchesList.length}
+                </div>
+                <div className="text-[10px] text-emerald-600/90 font-medium mt-0.5">
+                  Subjects Approved
+                </div>
+              </div>
+
+              <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3 text-center">
+                <div className="flex items-center justify-center gap-1.5 text-amber-800 text-xs font-medium mb-1">
+                  <Award className="w-3.5 h-3.5 text-amber-600" />
+                  Total Units
+                </div>
+                <div className="text-2xl font-extrabold text-amber-800">
+                  {totalApprovedUnits}
+                </div>
+                <div className="text-[10px] text-amber-700/90 font-medium mt-0.5">
+                  Units Credited
+                </div>
+              </div>
+            </div>
+
+            {/* Informational Callout */}
+            <div className="bg-blue-50/70 border border-blue-200/80 rounded-xl p-3 text-xs text-blue-900 flex items-start gap-2.5">
+              <Sparkles className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+              <p className="leading-relaxed text-blue-800 text-[11.5px]">
+                Finalizing will officially record these <strong>{approvedMatchesList.length} accredited subjects</strong>, generate the official ETEEAP accreditation report, and lock the evaluation.
+              </p>
+            </div>
+
+            {/* Evaluator Remarks Preview / Edit */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-gray-700 flex items-center justify-between">
+                <span>Evaluator Remarks / Note (Optional):</span>
+                <span className="text-[10px] text-gray-400 font-normal">Included in official record</span>
+              </label>
+              <Textarea
+                value={evaluatorNote}
+                onChange={(e) => setEvaluatorNote(e.target.value)}
+                placeholder="Enter any official evaluator remarks or notes..."
+                className="text-xs min-h-[70px] resize-none"
+              />
+            </div>
+          </div>
+
+          {/* Footer Actions */}
+          <div className="bg-gray-50 border-t border-gray-200/80 px-6 py-3.5 flex items-center justify-end gap-2.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setFinalizeDialogOpen(false)}
+              disabled={actioning}
+              className="text-xs h-9 px-4 text-gray-600 border-gray-300 hover:bg-gray-100"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={confirmFinalize}
+              disabled={actioning}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-9 px-5 font-semibold flex items-center gap-1.5 shadow-sm transition-all"
+              data-testid="confirm-finalize-modal-btn"
+            >
+              {actioning ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                  Finalizing Accreditation...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                  Confirm & Finalize
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject Application Custom Confirmation Modal */}
+      <Dialog open={rejectAppDialogOpen} onOpenChange={setRejectAppDialogOpen}>
+        <DialogContent className="max-w-md p-0 overflow-hidden border-0 shadow-2xl rounded-2xl">
+          <div className="h-2 bg-gradient-to-r from-red-500 to-rose-600" />
+          <div className="p-6 space-y-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-red-50 border border-red-200 flex items-center justify-center text-red-600 flex-shrink-0 shadow-xs">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+              </div>
+              <div className="space-y-1">
+                <DialogTitle className="text-base font-bold text-gray-900">
+                  Reject Application
+                </DialogTitle>
+                <p className="text-xs text-gray-500">
+                  Are you sure you want to reject this entire application?
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-red-50/70 border border-red-200/80 rounded-xl p-3 text-xs text-red-800 leading-relaxed">
+              This will update the application status to <strong>Rejected</strong> and notify the applicant.
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-gray-700">Reason for Rejection (Optional):</label>
+              <Textarea
+                value={evaluatorNote}
+                onChange={(e) => setEvaluatorNote(e.target.value)}
+                placeholder="State the reason for rejecting this application..."
+                className="text-xs min-h-[70px] resize-none"
+              />
+            </div>
+          </div>
+
+          <div className="bg-gray-50 border-t border-gray-200/80 px-6 py-3.5 flex items-center justify-end gap-2.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setRejectAppDialogOpen(false)}
+              disabled={actioning}
+              className="text-xs h-9 px-4 text-gray-600 border-gray-300"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={confirmRejectApp}
+              disabled={actioning}
+              className="bg-red-600 hover:bg-red-700 text-white text-xs h-9 px-5 font-semibold flex items-center gap-1.5 shadow-sm"
+            >
+              {actioning ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                  Rejecting...
+                </>
+              ) : (
+                <>
+                  <XCircle className="w-3.5 h-3.5 mr-1" />
+                  Confirm Rejection
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reopen Application Custom Confirmation Modal */}
+      <Dialog open={reopenDialogOpen} onOpenChange={setReopenDialogOpen}>
+        <DialogContent className="max-w-md p-0 overflow-hidden border-0 shadow-2xl rounded-2xl">
+          <div className="h-2 bg-gradient-to-r from-amber-400 to-amber-600" />
+          <div className="p-6 space-y-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700 flex-shrink-0 shadow-xs">
+                <RotateCcw className="w-5 h-5 text-amber-700" />
+              </div>
+              <div className="space-y-1">
+                <DialogTitle className="text-base font-bold text-gray-900">
+                  Reopen Application
+                </DialogTitle>
+                <p className="text-xs text-gray-500">
+                  Reopen this application for further evaluation and editing.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 text-xs text-amber-800 leading-relaxed">
+              Moving this application back to <strong>Under Review</strong> will unlock match modifications, allowing you to add, edit, or adjust accredited subjects.
+            </div>
+          </div>
+
+          <div className="bg-gray-50 border-t border-gray-200/80 px-6 py-3.5 flex items-center justify-end gap-2.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setReopenDialogOpen(false)}
+              disabled={actioning}
+              className="text-xs h-9 px-4 text-gray-600 border-gray-300"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={confirmReopen}
+              disabled={actioning}
+              className="bg-amber-600 hover:bg-amber-700 text-white text-xs h-9 px-5 font-semibold flex items-center gap-1.5 shadow-sm"
+            >
+              {actioning ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                  Reopening...
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                  Reopen for Review
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Applicant Summary Modal */}
       <Dialog open={summaryOpen} onOpenChange={setSummaryOpen}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-auto" data-testid="applicant-summary-modal">
@@ -2281,7 +2672,8 @@ const SubjectMatchCard = ({
   documents,
   onOpenTorEvidence,
   onBrowseModal,
-  onRemoveMatch
+  onRemoveMatch,
+  isApproving
 }) => {
   if (!match || !match.curriculum_subject) return null;
 
@@ -2327,15 +2719,26 @@ const SubjectMatchCard = ({
                 <button
                   type="button"
                   onClick={() => onApprove(match.id)}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 px-2 py-1 rounded transition-colors"
+                  disabled={isApproving}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 px-2 py-1 rounded transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  Approve
+                  {isApproving ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                      Approving...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      Approve
+                    </>
+                  )}
                 </button>
                 <button
                   type="button"
                   onClick={() => onReject(match.id)}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors"
+                  disabled={isApproving}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors disabled:opacity-60"
                 >
                   <XCircle className="w-3.5 h-3.5 text-red-600" />
                   Reject
@@ -2421,7 +2824,8 @@ const WorkMatchCard = ({
   getConfidenceColor,
   disabled,
   onBrowseModal,
-  onRemoveMatch
+  onRemoveMatch,
+  isApproving
 }) => {
   const isApproved = match && match.status === 'approved';
   const isPending = match && match.status === 'pending';
@@ -2457,15 +2861,26 @@ const WorkMatchCard = ({
                 <button
                   type="button"
                   onClick={() => onApprove(match.id)}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 px-2 py-1 rounded transition-colors"
+                  disabled={isApproving}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 px-2 py-1 rounded transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  Approve
+                  {isApproving ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                      Approving...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      Approve
+                    </>
+                  )}
                 </button>
                 <button
                   type="button"
                   onClick={() => onReject(match.id)}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors"
+                  disabled={isApproving}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors disabled:opacity-60"
                 >
                   <XCircle className="w-3.5 h-3.5 text-red-600" />
                   Reject
