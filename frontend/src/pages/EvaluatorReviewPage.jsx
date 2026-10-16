@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+﻿import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { DocumentPreviewModal } from '../components/DocumentPreviewModal';
@@ -13,7 +13,7 @@ import { applicationApi, subjectMatchApi, predictionApi, programApi } from '../l
 import {
   ArrowLeft, Loader2, FileText, Briefcase, CheckCircle2, XCircle,
   AlertCircle, BookOpen, User, Calendar, MapPin, Phone, Sparkles, Flag, Eye, Download, Pencil, Trash2,
-  GraduationCap, Clock, ChevronDown, ChevronRight, Check, Search, Filter
+  Clock, ChevronDown, ChevronRight, Check, Search, Filter
 } from 'lucide-react';
 import { toast } from 'sonner';
 import jsPDF from 'jspdf';

@@ -1,8 +1,8 @@
-import React from 'react';
+﻿import React from 'react';
 import { Link } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Navbar } from '../components/Navbar';
-import { GraduationCap, FileSearch, Sparkles, Award, ArrowRight, CheckCircle2, Brain, FileText, Clock, Users } from 'lucide-react';
+import { FileSearch, Sparkles, Award, ArrowRight, CheckCircle2, Brain, FileText, Clock, Users } from 'lucide-react';
 
 export const LandingPage = () => {
   const features = [
@@ -232,7 +232,7 @@ export const LandingPage = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
-              <GraduationCap className="w-6 h-6 text-gold" />
+              <img src="/logo.png" alt="ACCREDIA" className="h-8 w-auto object-contain" />
               <div>
                 <div className="font-serif font-bold text-white">ACCREDIA</div>
                 <div className="text-xs">CIT-U Credit Evaluation System</div>
