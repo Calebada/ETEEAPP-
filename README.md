@@ -144,6 +144,7 @@ ACCREDIA enforces CHED and CIT-U institutional policies programmatically:
 ## 📄 Document Processing & Evaluation Reliability
 
 - Uploaded documents are stored under `backend/media/docs/` locally and through Django's configured storage backend in deployed environments.
+- Production document storage uses the private Supabase Storage bucket configured by `SUPABASE_STORAGE_BUCKET` (recommended value: `applicant-documents`). Set `SUPABASE_SERVICE_ROLE_KEY` only in the backend deployment environment; never commit it or expose it to the frontend.
 - Uploads are validated for non-empty, valid Base64 content before being saved.
 - Each document receives a SHA-256 fingerprint. Uploading the same file again for the same application and document type returns `409 Conflict` instead of creating a duplicate record.
 - TOR and job-description files are saved first and OCR/AI extraction runs in a bounded background worker. The upload response returns immediately with `ocr_status: "pending"` while the original file remains unchanged. The application polls document status and reports `completed` or `failed` without hiding extraction errors.
@@ -393,6 +394,8 @@ python tests/test_matching_verification.py
    - `DEBUG`: `False`
    - `ALLOWED_HOSTS`: `accredia-backend.onrender.com,localhost,127.0.0.1`
    - `DATABASE_URL`: Your Supabase PostgreSQL connection string
+   - `SUPABASE_STORAGE_BUCKET`: `applicant-documents`
+   - `SUPABASE_SERVICE_ROLE_KEY`: Supabase service-role key, stored only as a backend secret
    - `GEMINI_API_KEY`: Valid Google Gemini API Key
 
 ### Deploying the Frontend on Vercel

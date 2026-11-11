@@ -95,6 +95,16 @@ USE_TZ = True
 STATIC_URL = 'static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+SUPABASE_STORAGE_BUCKET = os.getenv('SUPABASE_STORAGE_BUCKET', '').strip()
+if SUPABASE_STORAGE_BUCKET:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'core.supabase_storage.SupabaseStorage',
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOW_ALL_ORIGINS = True
@@ -131,6 +141,7 @@ else:
     SUPABASE_URL = ''
 
 SUPABASE_ANON_KEY = os.getenv('SUPABASE_ANON_KEY', '')
+SUPABASE_SERVICE_ROLE_KEY = os.getenv('SUPABASE_SERVICE_ROLE_KEY', '')
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
@@ -140,4 +151,3 @@ GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
 DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600   # 100MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600   # 100MB
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
-
