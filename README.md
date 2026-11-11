@@ -141,6 +141,23 @@ ACCREDIA enforces CHED and CIT-U institutional policies programmatically:
 
 ---
 
+## 📄 Document Processing & Evaluation Reliability
+
+- Uploaded documents are stored under `backend/media/docs/` locally and through Django's configured storage backend in deployed environments.
+- Uploads are validated for non-empty, valid Base64 content before being saved.
+- Each document receives a SHA-256 fingerprint. Uploading the same file again for the same application and document type returns `409 Conflict` instead of creating a duplicate record.
+- TOR and job-description files are saved first and OCR/AI extraction runs in a bounded background worker. The upload response returns immediately with `ocr_status: "pending"` while the original file remains unchanged. The application polls document status and reports `completed` or `failed` without hiding extraction errors.
+- Evaluator AI evaluation also runs in a background worker. The evaluator receives an immediate processing response, can continue viewing the application, and sees completion or a stored evaluation error through status polling.
+- Document API responses include `file_available`, allowing the evaluator dashboard to identify records whose physical file is no longer available.
+- Document preview uses the stored MIME type or filename extension and returns a clear re-upload message when a file is unavailable.
+- TOR processing preserves subjects across multiple uploaded TOR documents instead of replacing previously extracted subjects.
+- AI evaluation reports scan status, scanned-subject counts, match counts, missing files, and processing errors to the evaluator dashboard.
+- Login normalizes email casing and whitespace and distinguishes invalid credentials from backend connection failures.
+
+If a document shows **“The uploaded file is no longer available”**, upload the document again. The database record is retained for auditability, but the missing physical file cannot be reconstructed by the application.
+
+---
+
 ## 📁 Repository Structure
 
 ```text
@@ -153,7 +170,8 @@ ETEEAPP-/
 │   │   ├── upload_views.py        # File upload & document processing endpoints
 │   │   ├── gemini_service.py      # Multi-tier Gemini AI & heuristic matching engine
 │   │   ├── serializers.py         # DRF serializers
-│   │   └── ocr_engine.py          # PyMuPDF and RapidOCR pipeline
+│   │   ├── tests.py               # Focused document upload regression tests
+│   │   └── migrations/            # Database schema migrations
 │   ├── media/                     # Uploaded documents and media files
 │   ├── tests/                     # Backend test suite
 │   ├── manage.py                  # Django CLI runner
@@ -271,6 +289,11 @@ cd ETEEAPP-
    ```
    *The backend will be running at `http://localhost:8000/api/`.*
 
+   From the repository root on Windows, both services can also be started with:
+   ```powershell
+   .\start-dev.bat
+   ```
+
 ---
 
 ### Step 3: Frontend Setup (React Application)
@@ -319,6 +342,28 @@ To run backend automated verification tests:
 ```bash
 cd backend
 python manage.py test
+```
+
+To run the focused document upload and duplicate detection tests:
+```bash
+python manage.py test core.tests
+```
+
+If a PostgreSQL test database is already in use, reuse it:
+```bash
+python manage.py test core.tests --keepdb
+```
+
+To validate the Django configuration and migrations:
+```bash
+python manage.py check
+python manage.py makemigrations --check --dry-run
+```
+
+To build the frontend for production:
+```powershell
+cd frontend
+npm.cmd run build
 ```
 
 To run individual extraction and matching unit tests:

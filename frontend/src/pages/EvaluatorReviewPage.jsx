@@ -78,6 +78,7 @@ export const EvaluatorReviewPage = () => {
   const [showFullReview, setShowFullReview] = useState(false);
   const [workCreditTarget, setWorkCreditTarget] = useState({ workId: '', curriculumId: '' });
   const [approvingMatchId, setApprovingMatchId] = useState(null);
+  const [scanSummary, setScanSummary] = useState(null);
 
   // Modern Confirmation Popups (replaces native window.confirm)
   const [finalizeDialogOpen, setFinalizeDialogOpen] = useState(false);
@@ -388,6 +389,8 @@ export const EvaluatorReviewPage = () => {
   }, [id]);
 
   const loadData = async (forceReloadAll = false) => {
+    let loadedApplication = null;
+    let loadedMatches = [];
     try {
       const [appResp, matchesResp, predResp] = await Promise.all([
         applicationApi.get(id),
@@ -396,6 +399,8 @@ export const EvaluatorReviewPage = () => {
       ]);
       setApplication(appResp.data);
       setMatches(matchesResp.data || []);
+      loadedApplication = appResp.data;
+      loadedMatches = matchesResp.data || [];
       setPrediction(predResp.data);
       setTorSubjects(appResp.data.tor_subjects || []);
       setEvaluatorNote(appResp.data.evaluator_note || '');
@@ -426,6 +431,7 @@ export const EvaluatorReviewPage = () => {
       toast.error('Failed to load application');
     }
     setLoading(false);
+    return { application: loadedApplication, matches: loadedMatches };
   };
 
   const handleApproveMatch = async (matchId) => {
@@ -728,14 +734,47 @@ export const EvaluatorReviewPage = () => {
 
   const handleRunAI = async () => {
     setActioning(true);
+    setScanSummary({ status: 'processing' });
+    let evaluationStartedInBackground = false;
     try {
       const resp = await applicationApi.runFullEvaluation(id);
-      toast.success(resp.data?.message || 'AI evaluation complete');
-      loadData();
+      if (resp.status === 202) {
+        evaluationStartedInBackground = true;
+        toast.success('AI evaluation started. You can continue reviewing while it runs.');
+        const poll = setInterval(async () => {
+          try {
+            const appResp = await applicationApi.get(id);
+            if (appResp.data?.status !== 'processing') {
+              clearInterval(poll);
+              const result = await loadData();
+              const subjects = result?.application?.tor_subjects?.length || 0;
+              const matches = result?.matches?.length || 0;
+              if (appResp.data?.evaluation_error) {
+                setScanSummary({ status: 'failed', error: appResp.data.evaluation_error });
+                toast.error(appResp.data.evaluation_error);
+              } else {
+                setScanSummary({ status: 'completed', subjects, matches, scan: {} });
+                toast.success(`AI evaluation complete: ${subjects} subjects scanned, ${matches} matches available.`);
+              }
+              setActioning(false);
+            }
+          } catch (pollError) {
+            clearInterval(poll);
+            setScanSummary({ status: 'failed', error: pollError.message || 'Failed to check evaluation status' });
+            setActioning(false);
+          }
+        }, 2000);
+        return;
+      }
     } catch (err) {
-      toast.error('Failed to run AI evaluation');
+      const message = err.response?.data?.error || err.message || 'Failed to run AI evaluation';
+      setScanSummary({ status: 'failed', error: message });
+      toast.error(message);
+    } finally {
+      if (!evaluationStartedInBackground) {
+        setActioning(false);
+      }
     }
-    setActioning(false);
   };
 
   const loadApplicantSummary = async () => {
@@ -1300,7 +1339,10 @@ export const EvaluatorReviewPage = () => {
                       >
                         <div className="min-w-0 flex-1 truncate">
                           <span className="font-medium text-gray-800 text-[11px] truncate block">{doc.file_name}</span>
-                          <span className="text-[10px] text-gray-500 capitalize">{doc.document_type?.replace('_', ' ')} · {Math.round((doc.file_size || 0) / 1024)} KB</span>
+                          <span className="text-[10px] text-gray-500 capitalize">
+                            {doc.document_type?.replace('_', ' ')} · {Math.round((doc.file_size || 0) / 1024)} KB
+                            {doc.file_available === false ? ' · file unavailable' : ''}
+                          </span>
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0">
                           {doc.ocr_status === 'completed' && <CheckCircle2 className="w-3 h-3 text-green-600" />}
@@ -1344,6 +1386,25 @@ export const EvaluatorReviewPage = () => {
                 className="space-y-6 xl:sticky xl:top-6 panel-scroll"
                 style={{ maxHeight: 'calc(100vh - 140px)', overflowY: 'auto', overflowX: 'hidden', paddingRight: '4px' }}
               >
+                {scanSummary && (
+                  <Card className={`p-3 border ${scanSummary.status === 'failed' ? 'border-red-200 bg-red-50' : 'border-blue-200 bg-blue-50'}`} data-testid="ai-scan-status">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-gray-800">
+                      {scanSummary.status === 'processing' && <Loader2 className="w-4 h-4 animate-spin text-blue-700" />}
+                      {scanSummary.status === 'completed' && <CheckCircle2 className="w-4 h-4 text-green-600" />}
+                      {scanSummary.status === 'failed' && <XCircle className="w-4 h-4 text-red-600" />}
+                      {scanSummary.status === 'processing' ? 'AI scan in progress...' : scanSummary.status === 'failed' ? 'AI scan failed' : 'AI scan completed'}
+                    </div>
+                    {scanSummary.status === 'completed' && (
+                      <div className="mt-1 text-xs text-gray-700">
+                        {scanSummary.subjects} subjects scanned · {scanSummary.matches} matches available
+                        {scanSummary.scan?.missing_documents?.length > 0 && (
+                          <div className="mt-1 text-amber-700">Unavailable files: {scanSummary.scan.missing_documents.join(', ')}</div>
+                        )}
+                      </div>
+                    )}
+                    {scanSummary.error && <div className="mt-1 text-xs text-red-700">{scanSummary.error}</div>}
+                  </Card>
+                )}
                 <Card className="p-5 border-gray-200 bg-white shadow-2xs">
                   <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                     <h3 className="font-serif font-semibold text-lg flex items-center gap-2 text-gray-900">

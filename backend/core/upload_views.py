@@ -5,12 +5,18 @@ from rest_framework.response import Response
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.http import FileResponse, Http404
+from django.db import transaction
+from django.db.models import Q
+import mimetypes
 from asgiref.sync import async_to_sync
 import base64
+import hashlib
 import uuid
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from django.db import close_old_connections
 
 from .models import (
     Application, TORDocument, TORSubject,
@@ -23,6 +29,10 @@ from .serializers import (
 )
 from .gemini_service import gemini_service, LOCAL_SUBJECT_PATTERN, fitz
 from .views import _get_work_experience_evidence
+
+
+OCR_EXECUTOR = ThreadPoolExecutor(max_workers=2)
+EVALUATION_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 
 @api_view(['GET'])
@@ -43,12 +53,18 @@ def preview_document(request, document_id):
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     
     if not default_storage.exists(doc.file_path):
-        return Response({'error': 'File not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({
+            'error': 'The uploaded file is no longer available. Please upload this document again.',
+            'code': 'file_unavailable',
+            'document_id': str(doc.id),
+        }, status=status.HTTP_404_NOT_FOUND)
     
     try:
         file_obj = default_storage.open(doc.file_path, 'rb')
-        response = FileResponse(file_obj, content_type=doc.mime_type or 'application/octet-stream')
-        response['Content-Disposition'] = f'inline; filename="{doc.file_name}"'
+        content_type = doc.mime_type or mimetypes.guess_type(doc.file_name)[0] or 'application/octet-stream'
+        response = FileResponse(file_obj, content_type=content_type)
+        safe_file_name = os.path.basename(doc.file_name).replace('"', '')
+        response['Content-Disposition'] = f'inline; filename="{safe_file_name}"'
         return response
     except Exception as e:
         return Response({'error': f'Failed to open file: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -85,43 +101,84 @@ def upload_document(request):
         _, file_data = file_data.split('base64,', 1)
     
     try:
-        file_content = base64.b64decode(file_data)
+        file_content = base64.b64decode(file_data, validate=True)
     except Exception as e:
         return Response({'error': f'Invalid file data: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+    if not file_content:
+        return Response({'error': 'Uploaded file is empty'}, status=status.HTTP_400_BAD_REQUEST)
+    file_sha256 = hashlib.sha256(file_content).hexdigest()
+
+    duplicate = ApplicantDocument.objects.filter(
+        application=application,
+        document_type=document_type,
+    ).filter(
+        Q(file_sha256=file_sha256)
+        | Q(file_name=file_name, file_size=len(file_content))
+    ).first()
+    if duplicate:
+        return Response({
+            'error': 'This document has already been uploaded for this application.',
+            'code': 'duplicate_document',
+            'document': ApplicantDocumentSerializer(duplicate).data,
+        }, status=status.HTTP_409_CONFLICT)
     
     # Save file locally
     ext = mime_type.split('/')[-1] if '/' in mime_type else 'bin'
     saved_filename = f"docs/{document_type}_{uuid.uuid4()}.{ext}"
-    saved_path = default_storage.save(saved_filename, ContentFile(file_content))
+    try:
+        with transaction.atomic():
+            saved_path = default_storage.save(saved_filename, ContentFile(file_content))
+            doc = ApplicantDocument.objects.create(
+                application=application,
+                document_type=document_type,
+                file_name=file_name,
+                file_path=saved_path,
+                file_size=len(file_content),
+                file_sha256=file_sha256,
+                mime_type=mime_type,
+                ocr_status='pending' if document_type in ['tor', 'job_description'] else 'not_applicable'
+            )
+    except Exception as e:
+        if default_storage.exists(saved_filename):
+            default_storage.delete(saved_filename)
+        return Response({'error': f'Unable to save document: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-    # Create document record
-    doc = ApplicantDocument.objects.create(
-        application=application,
-        document_type=document_type,
-        file_name=file_name,
-        file_path=saved_path,
-        file_size=len(file_content),
-        mime_type=mime_type,
-        ocr_status='pending' if document_type in ['tor', 'job_description'] else 'not_applicable'
-    )
-    
-    # Process TOR and Job Description with OCR (synchronous wrapper around async Gemini call)
+    response_data = ApplicantDocumentSerializer(doc).data
+
+    # OCR runs after the upload response so the applicant does not wait for
+    # PDF conversion and AI extraction. The worker reads the saved original.
     if document_type in ['tor', 'job_description']:
-        try:
-            file_base64 = base64.b64encode(file_content).decode('utf-8')
-            if document_type == 'tor':
-                process_tor_ocr_sync(doc.id, file_base64)
-            else:
-                process_job_description_ocr_sync(doc.id, file_base64)
-        except Exception as e:
-            print(f"OCR error: {e}")
-            doc.ocr_status = 'failed'
-            doc.save()
+        OCR_EXECUTOR.submit(process_document_ocr_background, doc.id)
     
     return Response(
-        ApplicantDocumentSerializer(doc).data,
+        response_data,
         status=status.HTTP_201_CREATED
     )
+
+
+def process_document_ocr_background(doc_id):
+    """Process a saved document without blocking the upload request."""
+    close_old_connections()
+    try:
+        doc = ApplicantDocument.objects.get(id=doc_id)
+        if not default_storage.exists(doc.file_path):
+            raise FileNotFoundError(f'Uploaded file is unavailable: {doc.file_path}')
+
+        with default_storage.open(doc.file_path, 'rb') as file_obj:
+            file_base64 = base64.b64encode(file_obj.read()).decode('utf-8')
+
+        if doc.document_type == 'tor':
+            process_tor_ocr_sync(doc.id, file_base64, clear_existing=False)
+        elif doc.document_type == 'job_description':
+            process_job_description_ocr_sync(doc.id, file_base64)
+    except Exception as exc:
+        print(f'Background OCR error for {doc_id}: {exc}')
+        ApplicantDocument.objects.filter(id=doc_id).update(
+            ocr_status='failed',
+            ocr_error=str(exc),
+        )
+    finally:
+        close_old_connections()
 
 
 @api_view(['POST'])
@@ -217,11 +274,12 @@ def upload_curriculum(request):
     return Response({'message': 'Curriculum uploaded', 'created_count': len(created), 'subjects': created})
 
 
-def process_tor_ocr_sync(doc_id, image_base64):
+def process_tor_ocr_sync(doc_id, image_base64, clear_existing=True):
     """Synchronous wrapper for OCR processing"""
     try:
         doc = ApplicantDocument.objects.get(id=doc_id)
         doc.ocr_status = 'processing'
+        doc.ocr_error = ''
         doc.save()
         
         # Call async Gemini service synchronously
@@ -230,8 +288,8 @@ def process_tor_ocr_sync(doc_id, image_base64):
         doc.ocr_raw = json.dumps(subjects_data) if subjects_data else ''
         doc.extracted_text = json.dumps(subjects_data) if subjects_data else ''
         
-        # Clear old TOR subject records for this application to prevent duplicates
-        TORSubject.objects.filter(application=doc.application).delete()
+        if clear_existing:
+            TORSubject.objects.filter(application=doc.application).delete()
 
         # Create TOR subject records
         created_count = 0
@@ -255,13 +313,16 @@ def process_tor_ocr_sync(doc_id, image_base64):
         
         print(f"Successfully processed TOR doc {doc_id}: Extracted {created_count} subjects.")
         doc.ocr_status = 'completed'
+        doc.ocr_error = ''
         doc.save()
+        return created_count
     
     except Exception as e:
         print(f"OCR processing error: {str(e)}")
         try:
             doc = ApplicantDocument.objects.get(id=doc_id)
             doc.ocr_status = 'failed'
+            doc.ocr_error = str(e)
             doc.save()
         except Exception:
             pass
@@ -272,6 +333,7 @@ def process_job_description_ocr_sync(doc_id, image_base64):
     try:
         doc = ApplicantDocument.objects.get(id=doc_id)
         doc.ocr_status = 'processing'
+        doc.ocr_error = ''
         doc.save()
 
         work_data = async_to_sync(gemini_service.extract_work_experience_from_job_description)(image_base64)
@@ -280,6 +342,7 @@ def process_job_description_ocr_sync(doc_id, image_base64):
         doc.extracted_text = json.dumps(work_data) if work_data else ''
 
         doc.ocr_status = 'completed'
+        doc.ocr_error = ''
         doc.save()
 
     except Exception as e:
@@ -287,6 +350,7 @@ def process_job_description_ocr_sync(doc_id, image_base64):
         try:
             doc = ApplicantDocument.objects.get(id=doc_id)
             doc.ocr_status = 'failed'
+            doc.ocr_error = str(e)
             doc.save()
         except Exception:
             pass
@@ -300,12 +364,23 @@ def ensure_tor_subjects_from_documents(application):
     populate the BSIT curriculum match list.
     """
     if TORSubject.objects.filter(application=application).exists():
-        return
+        return {
+            'documents': ApplicantDocument.objects.filter(application=application, document_type='tor').count(),
+            'readable_documents': None,
+            'subjects_created': 0,
+            'missing_documents': [],
+            'errors': [],
+            'reused_existing_subjects': True,
+        }
 
     tor_documents = ApplicantDocument.objects.filter(application=application, document_type='tor')
+    missing_documents = []
+    subjects_created = 0
+    errors = []
     for document in tor_documents:
         try:
             if not default_storage.exists(document.file_path):
+                missing_documents.append(document.file_name)
                 continue
 
             with default_storage.open(document.file_path, 'rb') as file_obj:
@@ -315,9 +390,19 @@ def ensure_tor_subjects_from_documents(application):
                 continue
 
             file_base64 = base64.b64encode(file_bytes).decode('utf-8')
-            process_tor_ocr_sync(document.id, file_base64)
+            subjects_created += process_tor_ocr_sync(document.id, file_base64, clear_existing=False) or 0
         except Exception as e:
             print(f"TOR recovery reprocess error for {document.id}: {e}")
+            errors.append(f'{document.file_name}: {str(e)}')
+
+    return {
+        'documents': tor_documents.count(),
+        'readable_documents': tor_documents.count() - len(missing_documents),
+        'subjects_created': subjects_created,
+        'missing_documents': missing_documents,
+        'errors': errors,
+        'reused_existing_subjects': False,
+    }
 
 
 @api_view(['POST'])
@@ -376,22 +461,50 @@ def process_application(request):
         application = Application.objects.get(id=application_id)
     except Application.DoesNotExist:
         return Response({'error': 'Application not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if application.status == 'processing':
+        return Response({
+            'message': 'AI evaluation is already processing',
+            'status': 'processing',
+            'application_id': str(application.id),
+        }, status=status.HTTP_202_ACCEPTED)
     
     application.status = 'processing'
+    application.evaluation_error = ''
     application.save()
-    
+
+    EVALUATION_EXECUTOR.submit(process_application_background, application.id)
+    return Response({
+        'message': 'AI evaluation started',
+        'status': 'processing',
+        'application_id': str(application.id),
+    }, status=status.HTTP_202_ACCEPTED)
+
+
+def process_application_background(application_id):
+    """Run evaluation without holding the evaluator's HTTP request open."""
+    close_old_connections()
     try:
-        run_full_evaluation_sync(str(application.id))
-        application.refresh_from_db()
-        return Response({
-            'message': 'AI evaluation completed successfully',
-            'application': ApplicationSerializer(application).data
-        })
-    except Exception as e:
-        print(f"Process application error: {str(e)}") 
-        application.status = 'submitted'
-        application.save()
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        deadline = time.monotonic() + 120
+        while ApplicantDocument.objects.filter(
+            application_id=application_id,
+            document_type='tor',
+            ocr_status__in=['pending', 'processing'],
+        ).exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError('TOR scanning did not finish within two minutes.')
+            time.sleep(1)
+
+        evaluation = run_full_evaluation_sync(str(application_id))
+        print(f'Application {application_id} evaluation completed: {evaluation}')
+    except Exception as exc:
+        print(f'Process application error: {exc}')
+        Application.objects.filter(id=application_id).update(
+            status='submitted',
+            evaluation_error=str(exc),
+        )
+    finally:
+        close_old_connections()
 
 
 
@@ -414,7 +527,7 @@ def run_full_evaluation_sync(application_id):
 
     # Recovery path: older TOR uploads may have completed OCR but never created
     # TORSubject rows, which leaves evaluation with nothing to match.
-    ensure_tor_subjects_from_documents(application)
+    scan_result = ensure_tor_subjects_from_documents(application)
     
     work_experiences_list = _get_work_experience_evidence(application)
     work_exp_objects = list(WorkExperience.objects.filter(application=application))
@@ -657,6 +770,12 @@ def run_full_evaluation_sync(application_id):
     
     application.status = 'under_review'
     application.save()
+    return {
+        'subjects_scanned': len(tor_subjects),
+        'matches_created': len(matches_to_create),
+        'matches_total': SubjectMatch.objects.filter(application=application).count(),
+        'scan': scan_result,
+    }
 
 
 @api_view(['POST'])

@@ -246,6 +246,12 @@ export const ApplyPage = () => {
         } catch (uploadErr) {
           const msg = uploadErr.response?.data?.error || uploadErr.response?.data?.detail || 'Upload failed';
           toast.error(msg);
+          if (uploadErr.response?.status === 409 && uploadErr.response?.data?.document) {
+            setDocuments(prev => {
+              const duplicate = uploadErr.response.data.document;
+              return prev.some(doc => doc.id === duplicate.id) ? prev : [...prev, duplicate];
+            });
+          }
         } finally {
           setUploadingByType(prev => ({ ...prev, [documentType]: false }));
           if (documentType === 'tor') {
@@ -955,7 +961,10 @@ export const ApplyPage = () => {
                       <div key={doc.id} className="flex items-center justify-between gap-3 bg-white rounded p-2">
                         <div className="flex-1 text-sm text-gray-800 truncate">{doc.document_type.toUpperCase()}: {doc.file_name}</div>
                         <div className="flex items-center gap-2">
-                          <span className="text-xs text-gray-500">{doc.ocr_status === 'completed' ? 'Processed' : doc.ocr_status}</span>
+                          <span className="text-xs text-gray-500">
+                            {doc.ocr_status === 'completed' ? 'Processed' : doc.ocr_status}
+                            {doc.ocr_status === 'failed' && doc.ocr_error ? `: ${doc.ocr_error}` : ''}
+                          </span>
                           <Button variant="ghost" size="sm" onClick={() => previewDocument(doc.id)} data-testid={`review-preview-doc-${doc.id}`}>
                             Preview
                           </Button>

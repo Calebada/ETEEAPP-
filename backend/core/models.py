@@ -109,6 +109,7 @@ class Application(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     finalized_at = models.DateTimeField(null=True, blank=True)
     evaluator_note = models.TextField(blank=True)
+    evaluation_error = models.TextField(blank=True, default='')
     
     class Meta:
         db_table = 'applications'
@@ -161,8 +162,10 @@ class ApplicantDocument(models.Model):
     file_name = models.CharField(max_length=255)
     file_path = models.CharField(max_length=500)
     file_size = models.IntegerField(default=0)
+    file_sha256 = models.CharField(max_length=64, blank=True, default='')
     mime_type = models.CharField(max_length=100, blank=True)
     ocr_status = models.CharField(max_length=20, choices=OCR_STATUS_CHOICES, default='pending')
+    ocr_error = models.TextField(blank=True, default='')
     ocr_raw = models.TextField(blank=True)
     extracted_text = models.TextField(blank=True)
     uploaded_at = models.DateTimeField(default=timezone.now)

@@ -70,13 +70,32 @@ export const DocumentPreviewModal = ({ document: doc, open, onClose, focusSubjec
   const loadDocument = async () => {
     setLoading(true);
     setError(null);
+    setBlobUrl((currentUrl) => {
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+      return null;
+    });
     try {
       const response = await documentApi.preview(doc.id);
-      const blob = new Blob([response.data], { type: inferMimeType() });
+      const responseType = response.headers?.['content-type'] || inferMimeType();
+      const blob = response.data instanceof Blob
+        ? response.data
+        : new Blob([response.data], { type: responseType });
       const url = URL.createObjectURL(blob);
       setBlobUrl(url);
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to load document');
+      let message = 'Failed to load document';
+      const responseData = err.response?.data;
+      if (responseData instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await responseData.text());
+          message = parsed.error || message;
+        } catch {
+          // Keep the generic message when the server did not return JSON.
+        }
+      } else if (responseData?.error) {
+        message = responseData.error;
+      }
+      setError(message);
     }
     setLoading(false);
   };

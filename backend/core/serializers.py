@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.conf import settings
 from django.contrib.auth import authenticate
+from django.core.files.storage import default_storage
 import requests
 from .models import (
     User, Program, CurriculumSubject, Application,
@@ -95,7 +96,7 @@ class LoginSerializer(serializers.Serializer):
         return user
     
     def validate(self, data):
-        email = data.get('email')
+        email = (data.get('email') or '').strip().lower()
         password = data.get('password')
         
         if email and password:
@@ -132,13 +133,19 @@ class WorkExperienceSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
 class ApplicantDocumentSerializer(serializers.ModelSerializer):
+    file_available = serializers.SerializerMethodField()
+
+    def get_file_available(self, obj):
+        return default_storage.exists(obj.file_path)
+
     class Meta:
         model = ApplicantDocument
         fields = [
             'id', 'application', 'document_type', 'file_name', 'file_path',
-            'file_size', 'mime_type', 'ocr_status', 'extracted_text', 'uploaded_at'
+            'file_size', 'file_sha256', 'mime_type', 'ocr_status', 'ocr_error', 'extracted_text', 'uploaded_at',
+            'file_available'
         ]
-        read_only_fields = ['id', 'uploaded_at', 'ocr_status', 'extracted_text', 'ocr_raw']
+        read_only_fields = ['id', 'uploaded_at', 'ocr_status', 'ocr_error', 'extracted_text', 'ocr_raw']
 
 class TORDocumentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -178,7 +185,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
             'id', 'applicant', 'program', 'program_id', 'status',
             'phone', 'address', 'birth_date',
             'recommended_program', 'recommendation_reasoning',
-            'created_at', 'finalized_at', 'evaluator_note',
+            'created_at', 'finalized_at', 'evaluator_note', 'evaluation_error',
             'work_experiences', 'documents', 'tor_subjects'
         ]
         read_only_fields = ['id', 'created_at', 'finalized_at']

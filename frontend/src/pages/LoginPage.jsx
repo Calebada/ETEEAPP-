@@ -22,15 +22,18 @@ export const LoginPage = () => {
     setLoading(true);
     
     try {
-      const user = await login(email, password);
+      const user = await login(email.trim().toLowerCase(), password);
       toast.success('Login successful!');
       navigate(`/${user.role}`);
     } catch (err) {
-      const errorMsg = err.response?.data?.non_field_errors?.[0] || err.response?.data?.detail || 'Invalid credentials';
+      const errorMsg = err.response?.data?.non_field_errors?.[0]
+        || err.response?.data?.detail
+        || (err.response ? 'Email or password is incorrect.' : 'Unable to connect to the backend. Please check that the server is running.');
       setError(errorMsg);
       toast.error(errorMsg);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
